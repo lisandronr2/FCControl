@@ -1,0 +1,1033 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FCControl</title>
+<meta name="theme-color" content="#1A3E52">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+
+<style>
+/* ══ Reset & tokens ══════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --blue:    #1A3E52;
+  --blue2:   #112E3E;
+  --blue3:   #24627E;
+  --orange:  #E05C0A;
+  --orange2: #B84A06;
+  --paper:   #F5F1E8;
+  --paper2:  #EAE5D8;
+  --white:   #FFFFFF;
+  --ink:     #1C1A17;
+  --gray:    #6B6560;
+  --line:    rgba(28,26,23,.14);
+  --ok:      #2D7A4F;
+  --warn:    #A06010;
+  --red:     #B03030;
+  --mono:    'JetBrains Mono', 'Courier New', monospace;
+}
+
+html, body {
+  height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ══ Contenedor centrado (simula pantalla móvil en desktop) ══ */
+.frame {
+  max-width: 430px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+}
+
+/* ══ Topbar ══════════════════════════════════════════════════ */
+.topbar {
+  background: var(--blue);
+  color: #fff;
+  padding: 14px 18px 12px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  flex-shrink: 0;
+}
+.brand { display: flex; align-items: baseline; gap: 9px; }
+.brand-name {
+  font-family: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  font-size: 28px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .02em; line-height: 1;
+}
+.brand-sub {
+  font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: rgba(255,255,255,.55);
+}
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #3FB06A; flex-shrink: 0;
+  box-shadow: 0 0 0 3px rgba(63,176,106,.22);
+}
+.status-dot.offline { background: #E04040; box-shadow: 0 0 0 3px rgba(224,64,64,.22); }
+.status-txt { font-size: 11px; color: rgba(255,255,255,.75); }
+.cfg-btn {
+  background: none; border: none; color: rgba(255,255,255,.75);
+  cursor: pointer; font-size: 20px; padding: 2px 6px; border-radius: 6px; line-height: 1;
+}
+.cfg-btn:active { background: rgba(255,255,255,.1); }
+
+/* ══ Tabs ════════════════════════════════════════════════════ */
+.tabs {
+  display: flex; background: var(--blue2); flex-shrink: 0;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+.tab-btn {
+  flex: 1; padding: 10px 4px;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 13px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
+  color: rgba(255,255,255,.5); background: none; border: none; cursor: pointer;
+  border-bottom: 2px solid transparent; transition: color .15s;
+}
+.tab-btn.active { color: var(--orange); border-bottom-color: var(--orange); }
+
+/* ══ Contenido principal ══════════════════════════════════════ */
+.view { flex: 1; padding: 16px 15px 90px; overflow-y: auto; }
+.view.hidden { display: none; }
+
+/* ══ Label estándar ══════════════════════════════════════════ */
+.lbl {
+  display: block; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em;
+  color: var(--gray); margin-bottom: 6px;
+}
+
+/* ══ Buscador con desplegable ════════════════════════════════ */
+.search-wrap { position: relative; margin-bottom: 4px; }
+
+.search-box {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--white); border: 1.5px solid var(--ink);
+  border-radius: 10px; padding: 11px 14px;
+  transition: border-color .15s;
+}
+.search-box:focus-within { border-color: var(--blue3); }
+.search-box input {
+  flex: 1; border: none; outline: none;
+  font-size: 16px; color: var(--ink); background: transparent;
+}
+.search-box input::placeholder { color: var(--gray); }
+.search-icon { color: var(--gray); font-size: 17px; flex-shrink: 0; }
+.clear-btn {
+  background: none; border: none; color: var(--gray);
+  cursor: pointer; font-size: 16px; padding: 0 2px; line-height: 1;
+  display: none;
+}
+.clear-btn.show { display: block; }
+
+/* Dropdown de sugerencias */
+.dropdown {
+  position: absolute; left: 0; right: 0; top: calc(100% + 5px);
+  background: var(--white); border: 1.5px solid var(--ink);
+  border-radius: 10px; max-height: 250px; overflow-y: auto;
+  z-index: 50; box-shadow: 0 10px 28px rgba(0,0,0,.13);
+  display: none;
+}
+.dropdown.open { display: block; }
+
+.dd-item {
+  padding: 10px 14px; cursor: pointer;
+  border-bottom: .5px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; transition: background .1s;
+}
+.dd-item:last-child { border-bottom: none; }
+.dd-item:hover, .dd-item.focused { background: var(--paper2); }
+
+.dd-name { font-size: 14px; font-weight: 500; flex: 1; min-width: 0; }
+.dd-name mark {
+  background: #FFD166; color: var(--ink);
+  border-radius: 2px; padding: 0 1px;
+}
+.dd-badge {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .04em; padding: 2px 7px; border-radius: 10px;
+  white-space: nowrap; flex-shrink: 0;
+}
+.dd-badge.done   { background: #E0F3EB; color: #1C6B3A; }
+.dd-badge.pend   { background: #FEF3E1; color: #8A5A06; }
+.dd-count { font-size: 11px; color: var(--gray); text-align: right; padding: 8px 14px; }
+
+/* Sin resultados */
+.dd-empty { padding: 14px; font-size: 13px; color: var(--gray); text-align: center; }
+
+/* ══ Empty state ══════════════════════════════════════════════ */
+.empty-state {
+  text-align: center; padding: 42px 16px;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.empty-icon { font-size: 46px; opacity: .35; }
+.empty-txt { font-size: 14px; color: var(--gray); line-height: 1.6; max-width: 280px; }
+
+/* ══ Ficha de cámara ══════════════════════════════════════════ */
+.dev-card {
+  background: var(--white);
+  border: 1.5px solid var(--ink);
+  border-radius: 14px;
+  padding: 18px 16px 16px;
+  margin-top: 12px;
+  position: relative;
+  display: none;
+}
+.dev-card.visible { display: block; }
+
+/* Ojal de etiqueta de obra */
+.eyelet {
+  position: absolute; top: 16px; left: 16px;
+  width: 17px; height: 17px; border-radius: 50%;
+  background: var(--paper); border: 2.5px solid var(--ink);
+}
+
+.card-head { margin-left: 38px; }
+.card-eyebrow {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--gray);
+}
+.card-name {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 24px; font-weight: 700; text-transform: uppercase;
+  line-height: 1.1; color: var(--ink); margin-top: 2px;
+}
+
+/* Chips de estado */
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0 0; }
+.chip {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .04em; padding: 3px 9px; border-radius: 12px;
+}
+.chip-ok     { background: #E0F3EB; color: #1C6B3A; }
+.chip-pend   { background: #FEF3E1; color: #8A5A06; }
+.chip-done   { background: #E0F3EB; color: #1C6B3A; }
+.chip-estado { background: #E4EEF3; color: var(--blue); }
+
+/* Línea de puntos (perforation) */
+.perf {
+  border: none; border-top: 1.5px dashed var(--ink);
+  margin: 14px -16px 12px; opacity: .38;
+}
+
+/* Sección de título */
+.sec-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--gray);
+  padding-bottom: 5px; border-bottom: .5px solid var(--line);
+  margin-bottom: 9px; margin-top: 14px;
+}
+.sec-title:first-of-type { margin-top: 0; }
+
+/* Grid de datos de la cámara (generado dinámicamente) */
+.data-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-bottom: 4px;
+}
+.data-cell {
+  background: var(--paper); border-radius: 8px; padding: 9px 10px;
+}
+.data-cell.full { grid-column: 1 / -1; }
+.dc-key {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--gray);
+}
+.dc-val {
+  font-family: var(--mono); font-size: 12px; font-weight: 500;
+  color: var(--ink); margin-top: 3px; word-break: break-all; line-height: 1.4;
+}
+.dc-val.empty { color: var(--gray); font-style: italic; font-family: inherit; }
+.dc-val.text  { font-family: inherit; font-size: 13px; }
+
+/* ══ Bloque de captura de serial ══════════════════════════════ */
+.serial-block {
+  background: var(--paper); border-radius: 10px;
+  padding: 14px 13px; margin-top: 14px; border: 1px solid var(--line);
+}
+
+.field { margin-bottom: 11px; }
+.field:last-child { margin-bottom: 0; }
+
+.field input {
+  width: 100%; border: 1.5px solid var(--line);
+  border-radius: 8px; padding: 10px 12px;
+  font-family: var(--mono); font-size: 15px; font-weight: 500;
+  background: var(--white); color: var(--ink); outline: none;
+  transition: border-color .15s;
+}
+.field input:focus  { border-color: var(--blue3); }
+.field input.text-f { font-family: 'Inter', sans-serif; font-size: 14px; }
+.field input.err    { border-color: var(--red); }
+.field .err-msg     { font-size: 11px; color: var(--red); margin-top: 3px; display: none; }
+.field .err-msg.show { display: block; }
+
+.field select {
+  width: 100%; border: 1.5px solid var(--line);
+  border-radius: 8px; padding: 10px 12px;
+  font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 500;
+  background: var(--white) url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="%236B6560" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>') no-repeat right 12px center;
+  color: var(--ink); outline: none; appearance: none; -webkit-appearance: none;
+  transition: border-color .15s;
+}
+.field select:focus { border-color: var(--blue3); }
+
+/* Última actualización */
+.last-update {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; color: var(--gray); margin: 10px 0;
+}
+.last-update span:last-child { font-family: var(--mono); font-size: 11px; }
+
+/* Botón guardar */
+.save-btn {
+  width: 100%; background: var(--orange); color: #fff;
+  border: none; border-radius: 10px; padding: 14px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 18px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; cursor: pointer; margin-top: 12px;
+  transition: background .15s;
+}
+.save-btn:hover:not(:disabled) { background: var(--orange2); }
+.save-btn:disabled { background: #C4BEB4; cursor: not-allowed; }
+.save-btn.saving {
+  background: var(--blue); cursor: wait;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+
+/* Spinner */
+.spinner {
+  width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.4);
+  border-top-color: #fff; border-radius: 50%;
+  animation: spin .7s linear infinite; display: none;
+}
+.save-btn.saving .spinner { display: block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ══ Resumen del día ══════════════════════════════════════════ */
+.sum-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.sum-card {
+  background: var(--white); border: 1.5px solid var(--ink);
+  border-radius: 12px; padding: 15px 13px;
+}
+.sum-n {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 40px; font-weight: 700; line-height: 1;
+}
+.sum-l { font-size: 12px; color: var(--gray); margin-top: 3px; }
+
+.prog-card {
+  background: var(--white); border: 1.5px solid var(--ink);
+  border-radius: 12px; padding: 14px 13px; margin-bottom: 12px;
+}
+.prog-row {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 8px; font-size: 12px; font-weight: 600;
+}
+.prog-pct { color: var(--orange); }
+.prog-bar { height: 8px; background: var(--paper2); border-radius: 4px; overflow: hidden; }
+.prog-fill {
+  height: 100%; background: var(--orange); border-radius: 4px;
+  transition: width .4s ease;
+}
+
+.log-card {
+  background: var(--white); border: 1.5px solid var(--ink);
+  border-radius: 12px; padding: 14px 13px;
+}
+.log-head {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 15px; font-weight: 700; text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.log-entry {
+  padding: 8px 0; border-bottom: .5px solid var(--line); font-size: 12px;
+}
+.log-entry:last-child { border-bottom: none; }
+.log-entry-name {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 15px; font-weight: 700; text-transform: uppercase;
+}
+.log-entry-sub { color: var(--gray); margin-top: 2px; line-height: 1.4; }
+.log-empty { text-align: center; color: var(--gray); padding: 20px 0; font-size: 13px; }
+
+/* ══ Setup overlay ════════════════════════════════════════════ */
+.setup-overlay {
+  position: fixed; inset: 0; background: var(--paper);
+  z-index: 100; display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.setup-overlay.hidden { display: none; }
+.setup-card {
+  width: 100%; max-width: 400px; background: var(--white);
+  border: 1.5px solid var(--ink); border-radius: 14px; padding: 26px 22px;
+}
+.setup-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 26px; font-weight: 700; text-transform: uppercase; margin-bottom: 6px;
+}
+.setup-desc { font-size: 13px; color: var(--gray); line-height: 1.6; margin-bottom: 16px; }
+.setup-lbl { display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--gray); margin-bottom: 5px; }
+.setup-input {
+  width: 100%; border: 1.5px solid var(--line); border-radius: 8px;
+  padding: 11px 12px; font-family: var(--mono); font-size: 12px;
+  background: var(--paper); color: var(--ink); outline: none; margin-bottom: 6px;
+}
+.setup-input:focus { border-color: var(--blue3); background: var(--white); }
+.setup-err { font-size: 12px; color: var(--red); margin-bottom: 10px; display: none; }
+.setup-err.show { display: block; }
+.setup-save {
+  width: 100%; background: var(--blue); color: #fff; border: none;
+  border-radius: 9px; padding: 13px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 17px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; cursor: pointer;
+}
+.setup-save:active { background: var(--blue2); }
+.setup-steps {
+  font-size: 12px; color: var(--gray); margin-top: 16px; line-height: 1.7;
+  border-top: .5px solid var(--line); padding-top: 12px;
+}
+.setup-steps b { color: var(--ink); }
+
+/* ══ Toast ════════════════════════════════════════════════════ */
+.toast {
+  position: fixed; bottom: 22px; left: 50%;
+  transform: translate(-50%, 10px);
+  background: var(--ink); color: #fff;
+  padding: 11px 18px; border-radius: 10px; font-size: 13px;
+  opacity: 0; pointer-events: none;
+  transition: opacity .22s, transform .22s;
+  z-index: 200; max-width: 90%; white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0,0,0,.18);
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.ok  { background: var(--ok); }
+.toast.err { background: var(--red); }
+</style>
+</head>
+<body>
+
+<!-- ════════════════ SETUP ════════════════ -->
+<div id="setupOverlay" class="setup-overlay hidden">
+  <div class="setup-card">
+    <div class="setup-title">FCControl</div>
+    <p class="setup-desc">Conecta con tu Google Sheet <strong>CAMARAS</strong> pegando la URL de tu Apps Script publicado.</p>
+    <label class="setup-lbl" for="apiInput">URL de Apps Script</label>
+    <input id="apiInput" class="setup-input" type="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+    <div id="setupErr" class="setup-err"></div>
+    <button id="setupSave" class="setup-save">Conectar</button>
+    <div class="setup-steps">
+      <b>Cómo obtener la URL:</b><br>
+      1. Abre tu Google Sheet CAMARAS<br>
+      2. Extensiones → Apps Script → pega el archivo Code.gs<br>
+      3. Implementar → Nueva implementación → App web<br>
+      4. Acceso: <b>Cualquier usuario</b> → Implementar<br>
+      5. Copia la URL y pégala arriba
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════ APP ════════════════ -->
+<div class="frame">
+
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-name">FCControl</span>
+      <span class="brand-sub">Control de Cámaras</span>
+    </div>
+    <div class="topbar-right">
+      <div class="status-dot" id="statusDot"></div>
+      <span class="status-txt" id="statusTxt">Online</span>
+      <button class="cfg-btn" id="cfgBtn" title="Configuración">⚙</button>
+    </div>
+  </header>
+
+  <!-- Tabs -->
+  <nav class="tabs">
+    <button class="tab-btn active" data-view="search">🔍 Buscar</button>
+    <button class="tab-btn"        data-view="summary">📋 Resumen</button>
+  </nav>
+
+  <!-- ══ Vista: Búsqueda ══ -->
+  <div id="view-search" class="view">
+
+    <label class="lbl" for="searchInput">Nombre del dispositivo</label>
+    <div class="search-wrap">
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input id="searchInput" type="text"
+          placeholder="Escribe para buscar…"
+          autocomplete="off" autocorrect="off" spellcheck="false">
+        <button class="clear-btn" id="clearBtn" title="Limpiar">✕</button>
+      </div>
+      <div id="dropdown" class="dropdown" role="listbox"></div>
+    </div>
+
+    <!-- Estado vacío -->
+    <div id="emptyState" class="empty-state">
+      <div class="empty-icon">📷</div>
+      <div class="empty-txt">Escribe el nombre (o parte de él) para buscar un dispositivo en tu Google Sheet CAMARAS.</div>
+    </div>
+
+    <!-- Ficha del dispositivo -->
+    <div id="devCard" class="dev-card">
+      <div class="eyelet"></div>
+      <div class="card-head">
+        <div class="card-eyebrow">Dispositivo seleccionado</div>
+        <div class="card-name" id="cardName">—</div>
+      </div>
+      <div class="chips" id="cardChips"></div>
+
+      <hr class="perf">
+
+      <!-- Datos leídos del Sheet (generados dinámicamente) -->
+      <div class="sec-title">Datos del dispositivo</div>
+      <div class="data-grid" id="dataGrid"></div>
+
+      <!-- Captura de serial -->
+      <hr class="perf">
+      <div class="sec-title">Captura de campo</div>
+
+      <div class="serial-block">
+        <div class="field">
+          <label class="lbl" for="fSerial">Serial Number <span style="color:var(--orange)">*</span></label>
+          <input id="fSerial" type="text"
+            placeholder="Ej. SN-20240501-XXXX"
+            autocomplete="off" autocorrect="off" autocapitalize="characters">
+          <div class="err-msg" id="serialErr">El serial es obligatorio para guardar.</div>
+        </div>
+        <div class="field" id="estadoField" style="display:none;">
+          <label class="lbl" for="fEstado" id="estadoLbl">Estado</label>
+          <select id="fEstado"></select>
+        </div>
+        <div class="field">
+          <label class="lbl" for="fTech">Técnico que verifica</label>
+          <input id="fTech" type="text" class="text-f" placeholder="Nombre del instalador" autocomplete="off">
+        </div>
+      </div>
+
+      <div class="last-update">
+        <span>Última actualización</span>
+        <span id="cardFecha">—</span>
+      </div>
+
+      <button class="save-btn" id="saveBtn">
+        <div class="spinner"></div>
+        <span id="saveTxt">Guardar serial en el Sheet</span>
+      </button>
+
+    </div><!-- /devCard -->
+
+  </div><!-- /view-search -->
+
+  <!-- ══ Vista: Resumen ══ -->
+  <div id="view-summary" class="view hidden">
+    <div class="prog-card">
+      <div class="prog-row">
+        <span>Avance del día</span>
+        <span class="prog-pct" id="progPct">0%</span>
+      </div>
+      <div class="prog-bar">
+        <div class="prog-fill" id="progFill" style="width:0%"></div>
+      </div>
+    </div>
+    <div class="sum-grid">
+      <div class="sum-card">
+        <div class="sum-n" id="sumTotal" style="color:var(--blue)">0</div>
+        <div class="sum-l">Capturados hoy</div>
+      </div>
+      <div class="sum-card">
+        <div class="sum-n" id="sumPend" style="color:var(--warn)">0</div>
+        <div class="sum-l">Pendientes</div>
+      </div>
+    </div>
+    <div class="log-card">
+      <div class="log-head">Registro de hoy</div>
+      <div id="logList"><div class="log-empty">Sin capturas registradas hoy.</div></div>
+    </div>
+  </div>
+
+</div><!-- /frame -->
+
+<div id="toast" class="toast"></div>
+
+<script>
+/* ════════════════════════════════════════════════════════════
+   FCControl — lógica principal
+   ════════════════════════════════════════════════════════════ */
+const $ = id => document.getElementById(id);
+
+/* ── Claves de almacenamiento local ── */
+const KEYS = {
+  api:       'fcc_api_url',
+  names:     'fcc_names',         // [{name, row}]
+  logDate:   'fcc_log_date',
+  log:       'fcc_log',           // [{nombre, serial, tecnico, time}]
+  total:     'fcc_total_devices'  // total de dispositivos del Sheet
+};
+
+/* ── Estado ── */
+let apiUrl  = localStorage.getItem(KEYS.api) || '';
+let names   = [];    // [{name:string, row:number}]
+let dayLog  = [];
+let current = null;  // {data: {}, rowIndex: number, headers:[]}
+let totalDevices = parseInt(localStorage.getItem(KEYS.total) || '0', 10);
+
+try { names   = JSON.parse(localStorage.getItem(KEYS.names)  || '[]'); } catch(e){}
+
+/* ── Limpiar log si es un día nuevo ── */
+(function initLog(){
+  const today = new Date().toDateString();
+  if (localStorage.getItem(KEYS.logDate) !== today){
+    localStorage.setItem(KEYS.logDate, today);
+    localStorage.setItem(KEYS.log, '[]');
+  }
+  try { dayLog = JSON.parse(localStorage.getItem(KEYS.log) || '[]'); } catch(e){}
+})();
+
+/* ════ UI helpers ════════════════════════════════════════════ */
+let toastTimer;
+function showToast(msg, type = ''){
+  const t = $('toast');
+  clearTimeout(toastTimer);
+  t.textContent = msg;
+  t.className   = 'toast show' + (type ? ' ' + type : '');
+  toastTimer    = setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+function setStatus(online){
+  $('statusDot').classList.toggle('offline', !online);
+  $('statusTxt').textContent = online ? 'Online' : 'Sin red';
+  $('saveBtn').disabled = !online;
+}
+window.addEventListener('online',  () => setStatus(true));
+window.addEventListener('offline', () => setStatus(false));
+setStatus(navigator.onLine);
+
+/* ════ Setup ══════════════════════════════════════════════════ */
+function showSetup(errMsg){
+  $('apiInput').value = apiUrl || '';
+  const errEl = $('setupErr');
+  errEl.textContent = errMsg || '';
+  errEl.classList.toggle('show', !!errMsg);
+  $('setupOverlay').classList.remove('hidden');
+}
+function hideSetup(){ $('setupOverlay').classList.add('hidden'); }
+
+$('cfgBtn').addEventListener('click', () => showSetup());
+$('setupSave').addEventListener('click', async () => {
+  const v = $('apiInput').value.trim();
+  if (!v.startsWith('https://script.google.com/')){
+    $('setupErr').textContent = 'Pega la URL completa de Apps Script (https://script.google.com/…)';
+    $('setupErr').classList.add('show');
+    return;
+  }
+  apiUrl = v;
+  localStorage.setItem(KEYS.api, apiUrl);
+  hideSetup();
+  await loadNames();
+});
+
+if (!apiUrl) showSetup();
+
+/* ════ Carga de nombres desde el Sheet ════════════════════════ */
+async function loadNames(){
+  if (!apiUrl) return;
+  try {
+    const res  = await fetch(apiUrl + '?action=list');
+    const data = await res.json();
+    if (data.error) { showToast(data.error, 'err'); return; }
+    names = data.names || [];
+    localStorage.setItem(KEYS.names, JSON.stringify(names));
+    totalDevices = names.length;
+    localStorage.setItem(KEYS.total, String(totalDevices));
+  } catch(e){
+    // Usa caché local si no hay red
+    showToast('Sin conexión — usando lista local', '');
+  }
+}
+loadNames();
+
+/* ════ Búsqueda fuzzy ═════════════════════════════════════════ */
+function fuzzyScore(text, q){
+  const t = text.toLowerCase();
+  let ti = 0, qi = 0, score = 0;
+  while (ti < t.length && qi < q.length){
+    if (t[ti] === q[qi]){ score++; qi++; }
+    ti++;
+  }
+  if (qi < q.length) return -1;            // no encaja
+  if (t.includes(q))    score += 20;       // subcadena directa
+  if (t.startsWith(q))  score += 10;       // empieza igual
+  return score;
+}
+
+function highlight(text, q){
+  if (!q) return text;
+  const re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + ')', 'gi');
+  return text.replace(re, '<mark>$1</mark>');
+}
+
+/* ════ Dropdown ═══════════════════════════════════════════════ */
+const searchInput = $('searchInput');
+const dropdown    = $('dropdown');
+const clearBtn    = $('clearBtn');
+
+let debounceTimer;
+searchInput.addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(renderDropdown, 90);
+  clearBtn.classList.toggle('show', searchInput.value.length > 0);
+});
+searchInput.addEventListener('focus', renderDropdown);
+
+clearBtn.addEventListener('click', () => {
+  searchInput.value = '';
+  clearBtn.classList.remove('show');
+  dropdown.classList.remove('open');
+  dropdown.innerHTML = '';
+  searchInput.focus();
+});
+
+document.addEventListener('click', e => {
+  if (!dropdown.contains(e.target) && e.target !== searchInput)
+    dropdown.classList.remove('open');
+});
+
+function renderDropdown(){
+  const raw = searchInput.value.trim();
+  const q   = raw.toLowerCase();
+  dropdown.innerHTML = '';
+
+  if (!q){ dropdown.classList.remove('open'); return; }
+
+  if (!names.length){
+    dropdown.innerHTML = '<div class="dd-empty">Conecta primero con tu Google Sheet en ⚙ Configuración.</div>';
+    dropdown.classList.add('open');
+    return;
+  }
+
+  const scored = names
+    .map(entry => {
+      const n     = typeof entry === 'string' ? entry : entry.name;
+      const row   = typeof entry === 'object' ? entry.row : null;
+      const score = fuzzyScore(n, q);
+      return { name: n, row, score };
+    })
+    .filter(e => e.score >= 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 15);
+
+  if (!scored.length){
+    dropdown.innerHTML = '<div class="dd-empty">Sin coincidencias para "' + raw + '"</div>';
+    dropdown.classList.add('open');
+    return;
+  }
+
+  scored.forEach(entry => {
+    const done = dayLog.some(l => l.nombre === entry.name);
+    const div  = document.createElement('div');
+    div.className = 'dd-item';
+    div.setAttribute('role','option');
+    div.innerHTML =
+      '<span class="dd-name">' + highlight(entry.name, raw) + '</span>' +
+      '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
+        (done ? '✓ Listo' : 'Pendiente') +
+      '</span>';
+    div.addEventListener('click', () => {
+      searchInput.value = entry.name;
+      clearBtn.classList.add('show');
+      dropdown.classList.remove('open');
+      loadDevice(entry.name);
+    });
+    dropdown.appendChild(div);
+  });
+
+  // Contador
+  const count = document.createElement('div');
+  count.className = 'dd-count';
+  count.textContent = scored.length + ' resultado' + (scored.length !== 1 ? 's' : '');
+  dropdown.appendChild(count);
+
+  dropdown.classList.add('open');
+}
+
+/* Navegar con teclado */
+searchInput.addEventListener('keydown', e => {
+  const items = [...dropdown.querySelectorAll('.dd-item')];
+  const cur   = items.findIndex(i => i.classList.contains('focused'));
+
+  if (e.key === 'ArrowDown'){
+    e.preventDefault();
+    items.forEach(i => i.classList.remove('focused'));
+    const next = items[cur + 1] || items[0];
+    if (next){ next.classList.add('focused'); next.scrollIntoView({block:'nearest'}); }
+  }
+  if (e.key === 'ArrowUp'){
+    e.preventDefault();
+    items.forEach(i => i.classList.remove('focused'));
+    const prev = items[cur - 1] || items[items.length - 1];
+    if (prev){ prev.classList.add('focused'); prev.scrollIntoView({block:'nearest'}); }
+  }
+  if (e.key === 'Enter'){
+    e.preventDefault();
+    const focused = dropdown.querySelector('.dd-item.focused');
+    if (focused){ focused.click(); return; }
+    const first = items[0];
+    if (first){ first.click(); }
+  }
+  if (e.key === 'Escape'){
+    dropdown.classList.remove('open');
+  }
+});
+
+/* ════ Cargar dispositivo desde el Sheet ═════════════════════ */
+async function loadDevice(nombre){
+  if (!apiUrl){ showSetup('Configura primero la URL de tu Apps Script.'); return; }
+  showToast('Cargando…');
+  try {
+    const res  = await fetch(apiUrl + '?action=get&nombre=' + encodeURIComponent(nombre));
+    const data = await res.json();
+    if (data.error)      { showToast(data.error, 'err'); return; }
+    if (!data.result)    { showToast('Dispositivo no encontrado en el Sheet.', 'err'); return; }
+    current = { data: data.result, rowIndex: data.rowIndex, headers: data.headers || [], estadoHeader: null };
+    renderCard(nombre, data.result, data.headers || [], data.estadoOptions || []);
+  } catch(e){
+    showToast('Error de conexión. Verifica tu red.', 'err');
+  }
+}
+
+/* ════ Renderizar ficha ═══════════════════════════════════════ */
+
+// Columnas que NO se muestran en el grid de datos
+// (NOMBRE se muestra en el header; SERIAL se edita; FECHA/TECNICO se actualizan solos)
+const SKIP_IN_GRID = new Set(['NOMBRE','SERIAL','SERIAL NUMBER','FECHA','DATE','UPDATED','TECNICO','TÉCNICO','VERIFIED BY','ESTADO','STATUS']);
+// Columnas que usan fuente normal (no mono)
+const TEXT_COLS = new Set(['MODELO','MODEL','UBICACION','UBICACIÓN','LOCATION','ZONA','ZONE','TIPO','TYPE','DEVICE TYPE','ESTADO','STATUS','COMMENTS','NOTAS']);
+// Columnas que ocupan ancho completo
+const FULL_COLS = new Set(['MODELO','MODEL','UBICACION','UBICACIÓN','LOCATION','NOTAS','COMMENTS','DESCRIPCION','DESCRIPCIÓN']);
+
+// Encuentra el nombre exacto del encabezado que corresponde al Estado
+function findEstadoHeader(headers){
+  return headers.find(h => {
+    const u = h.toUpperCase().trim();
+    return u.includes('ESTADO') || u === 'STATUS';
+  });
+}
+
+function renderCard(nombre, record, headers, estadoOptions){
+  $('cardName').textContent = nombre;
+
+  // Chips
+  const done = dayLog.some(l => l.nombre === nombre);
+  const serialVal = record['SERIAL'] || record['SERIAL NUMBER'] || '';
+  const hasSN  = serialVal && !serialVal.toUpperCase().includes('PENDING');
+  const chips  = [];
+  if (done)        chips.push('<span class="chip chip-done">✓ Capturado hoy</span>');
+  else if (hasSN)  chips.push('<span class="chip chip-ok">Serial OK</span>');
+  else             chips.push('<span class="chip chip-pend">⚠ Sin serial</span>');
+
+  // Estado actual como chip informativo
+  const estadoHeader = findEstadoHeader(headers);
+  const estadoVal = estadoHeader ? (record[estadoHeader] || '') : '';
+  if (estadoVal) chips.push('<span class="chip chip-estado">' + estadoVal + '</span>');
+
+  $('cardChips').innerHTML = chips.join('');
+
+  // Guarda referencia del encabezado de Estado para poder guardar después
+  if (current) current.estadoHeader = estadoHeader || null;
+
+  // Selector de Estado (editable, con las opciones asignadas en el Sheet)
+  const estadoWrap = $('estadoField');
+  const estadoSel  = $('fEstado');
+  if (estadoHeader){
+    $('estadoLbl').textContent = estadoHeader;
+    let opts = (estadoOptions || []).slice();
+    if (estadoVal && !opts.includes(estadoVal)) opts.unshift(estadoVal);
+    if (!opts.length) opts = estadoVal ? [estadoVal] : [''];
+    estadoSel.innerHTML = opts.map(o =>
+      '<option value="' + o.replace(/"/g,'&quot;') + '"' + (o === estadoVal ? ' selected' : '') + '>' +
+        (o || '(sin definir)') +
+      '</option>'
+    ).join('');
+    estadoWrap.style.display = '';
+  } else {
+    estadoWrap.style.display = 'none';
+    estadoSel.innerHTML = '';
+  }
+
+  // Grid dinámico de datos
+  const grid = $('dataGrid');
+  grid.innerHTML = '';
+
+  // Ordena: primero las columnas de red (IP, Mask, GW, VLAN), luego el resto
+  const NET_ORDER = ['IP','IP ADDRESS','MASCARA','SUBNET','MASK','GATEWAY','GW','VLAN','PUERTOS','PORTS','FIREWALL PORTS'];
+  const orderedHeaders = [
+    ...headers.filter(h => NET_ORDER.some(k => h.toUpperCase().includes(k))),
+    ...headers.filter(h => !NET_ORDER.some(k => h.toUpperCase().includes(k)))
+  ];
+
+  orderedHeaders.forEach(h => {
+    const upper = h.toUpperCase().trim();
+    if (SKIP_IN_GRID.has(upper)) return;
+    const val  = record[h] || '';
+    const cell = document.createElement('div');
+    cell.className = 'data-cell' + (FULL_COLS.has(upper) ? ' full' : '');
+    const isText = TEXT_COLS.has(upper);
+    cell.innerHTML =
+      '<div class="dc-key">' + h + '</div>' +
+      '<div class="dc-val' + (isText ? ' text' : '') + (val ? '' : ' empty') + '">' +
+        (val || '—') +
+      '</div>';
+    grid.appendChild(cell);
+  });
+
+  // Campo serial pre-llenado si ya existe
+  const snInput = $('fSerial');
+  snInput.value = hasSN ? serialVal : '';
+  snInput.classList.remove('err');
+  $('serialErr').classList.remove('show');
+  $('fTech').value = '';
+
+  // Fecha última actualización
+  const fechaVal = record['FECHA'] || record['DATE'] || record['UPDATED'] || '';
+  $('cardFecha').textContent = fechaVal || 'Sin registro';
+
+  // Mostrar ficha
+  $('emptyState').style.display = 'none';
+  $('devCard').classList.add('visible');
+  if (!hasSN) setTimeout(() => snInput.focus(), 120);
+}
+
+/* ════ Guardar serial en el Sheet ════════════════════════════ */
+$('saveBtn').addEventListener('click', async () => {
+  if (!current){ showToast('Selecciona un dispositivo primero.', 'err'); return; }
+  if (!apiUrl) { showSetup('Configura la URL de Apps Script.'); return; }
+
+  const serial = $('fSerial').value.trim();
+  if (!serial){
+    $('fSerial').classList.add('err');
+    $('serialErr').classList.add('show');
+    $('fSerial').focus();
+    return;
+  }
+  $('fSerial').classList.remove('err');
+  $('serialErr').classList.remove('show');
+
+  const nombre = $('cardName').textContent;
+  const tecnico = $('fTech').value.trim();
+  const estadoVisible = $('estadoField').style.display !== 'none';
+  const estado = estadoVisible ? $('fEstado').value : '';
+
+  // Estado visual "guardando"
+  const btn = $('saveBtn');
+  btn.classList.add('saving');
+  btn.disabled = true;
+  $('saveTxt').textContent = 'Guardando…';
+
+  try {
+    const res  = await fetch(apiUrl, {
+      method:  'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body:    JSON.stringify({ nombre, serial, tecnico, estado, rowIndex: current.rowIndex })
+    });
+    const data = await res.json();
+
+    if (data.ok){
+      // Actualizar la ficha en pantalla
+      const now = data.fecha;
+      $('cardFecha').textContent = now;
+      const chips = ['<span class="chip chip-done">✓ Capturado hoy</span>'];
+      if (data.estado) chips.push('<span class="chip chip-estado">' + data.estado + '</span>');
+      $('cardChips').innerHTML = chips.join('');
+
+      // Actualizar caché de current
+      if (current.data['SERIAL'])        current.data['SERIAL']        = serial;
+      if (current.data['SERIAL NUMBER']) current.data['SERIAL NUMBER'] = serial;
+      if (current.estadoHeader && data.estado) current.data[current.estadoHeader] = data.estado;
+
+      // Log diario
+      const t = new Date().toLocaleTimeString('es', {hour:'2-digit', minute:'2-digit'});
+      dayLog = dayLog.filter(l => l.nombre !== nombre);
+      dayLog.push({ nombre, serial, tecnico, estado: data.estado || '', time: t });
+      localStorage.setItem(KEYS.log, JSON.stringify(dayLog));
+
+      showToast('✓ ' + nombre + ' actualizado en el Sheet', 'ok');
+    } else {
+      showToast(data.error || 'No se pudo guardar.', 'err');
+    }
+  } catch(e){
+    showToast('Error de conexión al guardar.', 'err');
+  } finally {
+    btn.classList.remove('saving');
+    btn.disabled = !navigator.onLine;
+    $('saveTxt').textContent = 'Guardar serial en el Sheet';
+  }
+});
+
+/* ════ Tabs ═══════════════════════════════════════════════════ */
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const target = btn.dataset.view;
+    document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
+    $('view-' + target).classList.remove('hidden');
+    if (target === 'summary') renderSummary();
+  });
+});
+
+/* ════ Resumen del día ════════════════════════════════════════ */
+function renderSummary(){
+  const total = dayLog.length;
+  const pend  = Math.max(0, totalDevices - total);
+  const pct   = totalDevices > 0 ? Math.round((total / totalDevices) * 100) : 0;
+
+  $('sumTotal').textContent  = total;
+  $('sumPend').textContent   = pend;
+  $('progPct').textContent   = pct + '%';
+  $('progFill').style.width  = pct + '%';
+
+  const list = $('logList');
+  if (!dayLog.length){
+    list.innerHTML = '<div class="log-empty">Sin capturas registradas hoy.</div>';
+    return;
+  }
+  list.innerHTML = [...dayLog].reverse().map(e =>
+    '<div class="log-entry">' +
+      '<div class="log-entry-name">' + e.nombre + '</div>' +
+      '<div class="log-entry-sub">' +
+        'SN: ' + e.serial +
+        (e.estado ? ' · ' + e.estado : '') +
+        (e.tecnico ? ' · ' + e.tecnico : '') +
+        ' · ' + e.time +
+      '</div>' +
+    '</div>'
+  ).join('');
+}
+
+/* ════ Service Worker (PWA) ═══════════════════════════════════ */
+if ('serviceWorker' in navigator)
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+</script>
+</body>
+</html>
