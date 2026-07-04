@@ -9,6 +9,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="html5-qrcode.min.js"></script>
 
 <style>
 /* ══ Reset & tokens ══════════════════════════════════════════ */
@@ -428,8 +429,10 @@ html, body {
   position: relative; width: 260px; height: 260px;
   border-radius: 16px; overflow: hidden;
 }
-.scan-frame video { width: 100%; height: 100%; object-fit: cover; display: block; }
-.scan-corners { position: absolute; inset: 0; pointer-events: none; }
+#scanRegion { width: 100%; height: 100%; }
+#scanRegion > div { width: 100% !important; height: 100% !important; padding: 0 !important; border: none !important; }
+#scanRegion video { width: 100% !important; height: 100% !important; object-fit: cover !important; display: block !important; }
+.scan-corners { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .scan-corners::before, .scan-corners::after,
 .scan-corners span::before, .scan-corners span::after {
   content: ''; position: absolute; width: 24px; height: 24px;
@@ -442,7 +445,7 @@ html, body {
 .scan-line {
   position: absolute; left: 12px; right: 12px; height: 2px;
   background: rgba(255,100,0,.85); border-radius: 1px;
-  animation: scanMove 2s ease-in-out infinite;
+  animation: scanMove 2s ease-in-out infinite; z-index: 2;
 }
 @keyframes scanMove {
   0%, 100% { top: 20px; }
@@ -501,7 +504,7 @@ html, body {
 <!-- ════════════════ SCANNER ════════════════ -->
 <div id="scanModal" class="scan-modal hidden">
   <div class="scan-frame">
-    <video id="scanVideo" autoplay playsinline muted></video>
+    <div id="scanRegion"></div>
     <div class="scan-corners"><span></span></div>
     <div class="scan-line"></div>
   </div>
@@ -1118,65 +1121,54 @@ function buildFilterChips() {
   });
 }
 
-/* ════ Scanner de código de barras ═══════════════════════════ */
-let scanning = false, scanStream = null, scanRafId = null, barcodeDetector = null;
+/* ════ Scanner de código de barras / QR (iOS + Android) ══════ */
+let scanner = null;
 
 $('scanBtn').addEventListener('click', startScanner);
 $('scanCancel').addEventListener('click', stopScanner);
 
 async function startScanner() {
-  if (!('BarcodeDetector' in window)) {
-    showToast('Tu navegador no soporta escáner automático. Escribe el serial.', 'err');
+  if (typeof Html5Qrcode === 'undefined') {
+    showToast('Librería de escáner no disponible.', 'err');
     return;
   }
+  $('scanModal').classList.remove('hidden');
   try {
-    scanStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-    });
-    const video = $('scanVideo');
-    video.srcObject = scanStream;
-    await video.play();
-    if (!barcodeDetector) {
-      const fmts = await BarcodeDetector.getSupportedFormats().catch(() =>
-        ['code_128','ean_13','ean_8','qr_code','code_39','upc_a','upc_e','data_matrix','itf','pdf417']
-      );
-      barcodeDetector = new BarcodeDetector({ formats: fmts });
-    }
-    scanning = true;
-    $('scanModal').classList.remove('hidden');
-    scanLoop();
-  } catch(e) {
-    showToast('No se pudo acceder a la cámara.', 'err');
-    stopScanner();
-  }
-}
-
-async function scanLoop() {
-  if (!scanning) return;
-  const video = $('scanVideo');
-  if (video.readyState >= video.HAVE_ENOUGH_DATA) {
-    try {
-      const codes = await barcodeDetector.detect(video);
-      if (codes.length) {
-        const val = codes[0].rawValue.trim();
-        $('fSerial').value = val;
+    scanner = new Html5Qrcode('scanRegion', { verbose: false });
+    await scanner.start(
+      { facingMode: 'environment' },
+      { fps: 15, aspectRatio: 1.0 },
+      (decodedText) => {
+        $('fSerial').value = decodedText.trim();
         $('fSerial').classList.remove('err');
         $('serialErr').classList.remove('show');
         showToast('✓ Código escaneado', 'ok');
         stopScanner();
-        return;
-      }
-    } catch(e) {}
+      },
+      () => {}
+    );
+  } catch(e) {
+    const msg = String(e.message || e);
+    if (msg.includes('NotAllowed') || msg.includes('Permission') || msg.includes('denied')) {
+      showToast('Permiso de cámara denegado — habilitalo en ajustes del navegador.', 'err');
+    } else if (msg.includes('NotFound') || msg.includes('Requested device not found')) {
+      showToast('No se encontró cámara en este dispositivo.', 'err');
+    } else {
+      showToast('No se pudo iniciar la cámara.', 'err');
+    }
+    stopScanner();
   }
-  scanRafId = requestAnimationFrame(scanLoop);
 }
 
-function stopScanner() {
-  scanning = false;
-  if (scanRafId) { cancelAnimationFrame(scanRafId); scanRafId = null; }
-  if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+async function stopScanner() {
+  if (scanner) {
+    try {
+      if (scanner.isScanning) await scanner.stop();
+      scanner.clear();
+    } catch(e) {}
+    scanner = null;
+  }
   $('scanModal').classList.add('hidden');
-  $('scanVideo').srcObject = null;
 }
 
 /* ════ Cola offline ══════════════════════════════════════════ */

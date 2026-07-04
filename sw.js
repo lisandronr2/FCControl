@@ -1,7 +1,7 @@
 // ── Incrementar CACHE_VERSION en cada nuevo deploy ────────────
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const CACHE_NAME    = 'fccontrol-' + CACHE_VERSION;
-const SHELL = ['./index.html', './manifest.json', './icon.svg'];
+const SHELL = ['./index.html', './manifest.json', './icon.svg', './html5-qrcode.min.js'];
 
 self.addEventListener('install', event => {
   event.waitUntil(
