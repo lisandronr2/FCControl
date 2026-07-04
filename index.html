@@ -400,9 +400,114 @@ html, body {
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.ok  { background: var(--ok); }
 .toast.err { background: var(--red); }
+
+/* ══ Filter bar ═══════════════════════════════════════════════ */
+.filter-bar {
+  display: flex; gap: 6px; padding: 10px 15px 8px; overflow-x: auto;
+  flex-shrink: 0; background: var(--paper);
+  border-bottom: .5px solid var(--line); scrollbar-width: none;
+}
+.filter-bar::-webkit-scrollbar { display: none; }
+.filter-chip {
+  flex-shrink: 0; padding: 5px 12px; border-radius: 20px;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 13px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  border: 1.5px solid var(--ink); background: transparent;
+  color: var(--ink); cursor: pointer; white-space: nowrap; transition: background .12s;
+}
+.filter-chip.active { background: var(--ink); color: var(--paper); }
+
+/* ══ Scanner modal ════════════════════════════════════════════ */
+.scan-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.92);
+  z-index: 300; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 20px;
+}
+.scan-modal.hidden { display: none; }
+.scan-frame {
+  position: relative; width: 260px; height: 260px;
+  border-radius: 16px; overflow: hidden;
+}
+.scan-frame video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scan-corners { position: absolute; inset: 0; pointer-events: none; }
+.scan-corners::before, .scan-corners::after,
+.scan-corners span::before, .scan-corners span::after {
+  content: ''; position: absolute; width: 24px; height: 24px;
+  border-color: #fff; border-style: solid;
+}
+.scan-corners::before { top: 12px; left: 12px;   border-width: 3px 0 0 3px; }
+.scan-corners::after  { top: 12px; right: 12px;  border-width: 3px 3px 0 0; }
+.scan-corners span::before { bottom: 12px; left: 12px;  border-width: 0 0 3px 3px; }
+.scan-corners span::after  { bottom: 12px; right: 12px; border-width: 0 3px 3px 0; }
+.scan-line {
+  position: absolute; left: 12px; right: 12px; height: 2px;
+  background: rgba(255,100,0,.85); border-radius: 1px;
+  animation: scanMove 2s ease-in-out infinite;
+}
+@keyframes scanMove {
+  0%, 100% { top: 20px; }
+  50%       { top: calc(100% - 20px); }
+}
+.scan-hint { color: rgba(255,255,255,.8); font-size: 13px; text-align: center; max-width: 240px; line-height: 1.5; }
+.scan-cancel-btn {
+  background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.3);
+  color: #fff; border-radius: 8px; padding: 10px 28px;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 16px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .04em; cursor: pointer;
+}
+.scan-cancel-btn:active { background: rgba(255,255,255,.22); }
+.scan-trigger {
+  background: var(--blue); color: #fff; border: none; border-radius: 8px;
+  padding: 0 13px; font-size: 18px; cursor: pointer; flex-shrink: 0;
+  align-self: stretch; transition: background .12s; line-height: 1;
+}
+.scan-trigger:active { background: var(--blue2); }
+.serial-row { display: flex; gap: 8px; align-items: stretch; }
+.serial-row input { flex: 1; }
+
+/* ══ Pending badge ════════════════════════════════════════════ */
+.pending-pill {
+  background: var(--orange); color: #fff; border-radius: 10px;
+  padding: 3px 8px; font-size: 10px; font-weight: 700;
+  font-family: 'Barlow Condensed', sans-serif; text-transform: uppercase; letter-spacing: .04em;
+}
+.pending-pill.hidden { display: none; }
+
+/* ══ Resumen por tipo ═════════════════════════════════════════ */
+.type-card {
+  background: var(--white); border: 1.5px solid var(--ink);
+  border-radius: 12px; padding: 14px 13px; margin-bottom: 12px;
+}
+.type-card-head {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 15px; font-weight: 700; text-transform: uppercase; margin-bottom: 10px;
+}
+.type-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 0; border-bottom: .5px solid var(--line); font-size: 12px;
+}
+.type-row:last-child { border-bottom: none; }
+.type-name {
+  font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+  font-size: 13px; text-transform: uppercase; min-width: 72px;
+}
+.type-bar-wrap { flex: 1; height: 6px; background: var(--paper2); border-radius: 3px; overflow: hidden; }
+.type-bar-fill  { height: 100%; background: var(--orange); border-radius: 3px; transition: width .4s; }
+.type-count { font-size: 11px; color: var(--gray); white-space: nowrap; min-width: 44px; text-align: right; }
 </style>
 </head>
 <body>
+
+<!-- ════════════════ SCANNER ════════════════ -->
+<div id="scanModal" class="scan-modal hidden">
+  <div class="scan-frame">
+    <video id="scanVideo" autoplay playsinline muted></video>
+    <div class="scan-corners"><span></span></div>
+    <div class="scan-line"></div>
+  </div>
+  <div class="scan-hint">Apuntá la cámara al código de barras o QR del serial</div>
+  <button id="scanCancel" class="scan-cancel-btn">Cancelar</button>
+</div>
 
 <!-- ════════════════ APP ════════════════ -->
 <div class="frame">
@@ -414,6 +519,7 @@ html, body {
       <span class="brand-sub">Control de Cámaras</span>
     </div>
     <div class="topbar-right">
+      <span id="pendingPill" class="pending-pill hidden"></span>
       <div class="status-dot" id="statusDot"></div>
       <span class="status-txt" id="statusTxt">Online</span>
     </div>
@@ -430,6 +536,11 @@ html, body {
     <button class="tab-btn active" data-view="search">🔍 Buscar</button>
     <button class="tab-btn"        data-view="summary">📋 Resumen</button>
   </nav>
+
+  <!-- Filter chips (se genera dinámicamente) -->
+  <div id="filterBar" class="filter-bar" style="display:none">
+    <button class="filter-chip active" data-type="ALL">Todos</button>
+  </div>
 
   <!-- ══ Vista: Búsqueda ══ -->
   <div id="view-search" class="view">
@@ -474,9 +585,12 @@ html, body {
       <div class="serial-block">
         <div class="field">
           <label class="lbl" for="fSerial">Serial Number <span style="color:var(--orange)">*</span></label>
-          <input id="fSerial" type="text"
-            placeholder="Ej. SN-20240501-XXXX"
-            autocomplete="off" autocorrect="off" autocapitalize="characters">
+          <div class="serial-row">
+            <input id="fSerial" type="text"
+              placeholder="Ej. SN-20240501-XXXX"
+              autocomplete="off" autocorrect="off" autocapitalize="characters">
+            <button id="scanBtn" class="scan-trigger" title="Escanear código">📷</button>
+          </div>
           <div class="err-msg" id="serialErr">El serial es obligatorio para guardar.</div>
         </div>
         <div class="field" id="estadoField" style="display:none;">
@@ -524,6 +638,8 @@ html, body {
         <div class="sum-l">Pendientes</div>
       </div>
     </div>
+    <div id="typeBreakdown"></div>
+
     <div class="log-card">
       <div class="log-head">Registro de hoy</div>
       <div id="logList"><div class="log-empty">Sin capturas registradas hoy.</div></div>
@@ -584,7 +700,7 @@ function setStatus(online){
   $('statusTxt').textContent = online ? 'Online' : 'Sin red';
   $('saveBtn').disabled = !online;
 }
-window.addEventListener('online',  () => setStatus(true));
+window.addEventListener('online',  () => { setStatus(true);  syncPendingQueue(); });
 window.addEventListener('offline', () => setStatus(false));
 setStatus(navigator.onLine);
 
@@ -599,6 +715,7 @@ async function loadNames(){
     localStorage.setItem(KEYS.names, JSON.stringify(names));
     totalDevices = names.length;
     localStorage.setItem(KEYS.total, String(totalDevices));
+    buildFilterChips();
   } catch(e){
     // Usa caché local si no hay red
     showToast('Sin conexión — usando lista local', '');
@@ -665,7 +782,10 @@ function renderDropdown(){
     return;
   }
 
-  const scored = names
+  const pool = activeFilter === 'ALL' ? names
+    : names.filter(e => getDeviceType(typeof e === 'string' ? e : e.name) === activeFilter);
+
+  const scored = pool
     .map(entry => {
       const n     = typeof entry === 'string' ? entry : entry.name;
       const row   = typeof entry === 'object' ? entry.row : null;
@@ -913,7 +1033,8 @@ $('saveBtn').addEventListener('click', async () => {
       showToast(data.error || 'No se pudo guardar.', 'err');
     }
   } catch(e){
-    showToast('Error de conexión al guardar.', 'err');
+    addToPendingQueue({ nombre, serial, tecnico, estado, rowIndex: current.rowIndex });
+    showToast('Sin red — guardado en cola local 📥', '');
   } finally {
     btn.classList.remove('saving');
     btn.disabled = !navigator.onLine;
@@ -944,6 +1065,8 @@ function renderSummary(){
   $('progPct').textContent   = pct + '%';
   $('progFill').style.width  = pct + '%';
 
+  renderTypeBreakdown();
+
   const list = $('logList');
   if (!dayLog.length){
     list.innerHTML = '<div class="log-empty">Sin capturas registradas hoy.</div>';
@@ -960,6 +1083,185 @@ function renderSummary(){
       '</div>' +
     '</div>'
   ).join('');
+}
+
+/* ════ Tipo de dispositivo ═══════════════════════════════════ */
+function getDeviceType(name) {
+  const m = String(name).match(/^[A-Z]+/);
+  return m ? m[0] : 'OTROS';
+}
+
+/* ════ Filter chips ══════════════════════════════════════════ */
+let activeFilter = 'ALL';
+
+function buildFilterChips() {
+  if (!names.length) return;
+  const bar = $('filterBar');
+  const types = [...new Set(names.map(e => getDeviceType(typeof e === 'string' ? e : e.name)))].sort();
+  bar.innerHTML = '<button class="filter-chip active" data-type="ALL">Todos (' + names.length + ')</button>';
+  types.forEach(t => {
+    const count = names.filter(e => getDeviceType(typeof e === 'string' ? e : e.name) === t).length;
+    const btn = document.createElement('button');
+    btn.className = 'filter-chip';
+    btn.dataset.type = t;
+    btn.textContent = t + ' (' + count + ')';
+    bar.appendChild(btn);
+  });
+  bar.style.display = '';
+  bar.querySelectorAll('.filter-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      bar.querySelectorAll('.filter-chip').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeFilter = btn.dataset.type;
+      renderDropdown();
+    });
+  });
+}
+
+/* ════ Scanner de código de barras ═══════════════════════════ */
+let scanning = false, scanStream = null, scanRafId = null, barcodeDetector = null;
+
+$('scanBtn').addEventListener('click', startScanner);
+$('scanCancel').addEventListener('click', stopScanner);
+
+async function startScanner() {
+  if (!('BarcodeDetector' in window)) {
+    showToast('Tu navegador no soporta escáner automático. Escribe el serial.', 'err');
+    return;
+  }
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+    const video = $('scanVideo');
+    video.srcObject = scanStream;
+    await video.play();
+    if (!barcodeDetector) {
+      const fmts = await BarcodeDetector.getSupportedFormats().catch(() =>
+        ['code_128','ean_13','ean_8','qr_code','code_39','upc_a','upc_e','data_matrix','itf','pdf417']
+      );
+      barcodeDetector = new BarcodeDetector({ formats: fmts });
+    }
+    scanning = true;
+    $('scanModal').classList.remove('hidden');
+    scanLoop();
+  } catch(e) {
+    showToast('No se pudo acceder a la cámara.', 'err');
+    stopScanner();
+  }
+}
+
+async function scanLoop() {
+  if (!scanning) return;
+  const video = $('scanVideo');
+  if (video.readyState >= video.HAVE_ENOUGH_DATA) {
+    try {
+      const codes = await barcodeDetector.detect(video);
+      if (codes.length) {
+        const val = codes[0].rawValue.trim();
+        $('fSerial').value = val;
+        $('fSerial').classList.remove('err');
+        $('serialErr').classList.remove('show');
+        showToast('✓ Código escaneado', 'ok');
+        stopScanner();
+        return;
+      }
+    } catch(e) {}
+  }
+  scanRafId = requestAnimationFrame(scanLoop);
+}
+
+function stopScanner() {
+  scanning = false;
+  if (scanRafId) { cancelAnimationFrame(scanRafId); scanRafId = null; }
+  if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+  $('scanModal').classList.add('hidden');
+  $('scanVideo').srcObject = null;
+}
+
+/* ════ Cola offline ══════════════════════════════════════════ */
+const QUEUE_KEY = 'fcc_pending_queue';
+
+function getPendingQueue() {
+  try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch(e) { return []; }
+}
+function savePendingQueue(q) {
+  localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
+  updatePendingBadge();
+}
+function addToPendingQueue(item) {
+  const q = getPendingQueue();
+  q.push({ ...item, queuedAt: new Date().toISOString() });
+  savePendingQueue(q);
+}
+function updatePendingBadge() {
+  const q = getPendingQueue();
+  const pill = $('pendingPill');
+  if (q.length) {
+    pill.textContent = q.length + ' pendiente' + (q.length !== 1 ? 's' : '');
+    pill.classList.remove('hidden');
+  } else {
+    pill.classList.add('hidden');
+  }
+}
+
+async function syncPendingQueue() {
+  const q = getPendingQueue();
+  if (!q.length || !navigator.onLine) return;
+  showToast('Sincronizando ' + q.length + ' guardado' + (q.length !== 1 ? 's' : '') + ' pendiente' + (q.length !== 1 ? 's' : '') + '…');
+  const failed = [];
+  let synced = 0;
+  for (const item of q) {
+    try {
+      const { queuedAt, ...payload } = item;
+      const res  = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.ok) synced++;
+      else failed.push(item);
+    } catch(e) { failed.push(item); }
+  }
+  savePendingQueue(failed);
+  if (synced)        showToast('✓ ' + synced + ' sincronizados con el Sheet', 'ok');
+  if (failed.length) showToast(failed.length + ' no pudieron sincronizarse', 'err');
+}
+
+// Inicializar badge al cargar
+updatePendingBadge();
+// Inicializar chips si hay nombres en caché
+if (names.length) buildFilterChips();
+
+/* ════ Breakdown por tipo ════════════════════════════════════ */
+function renderTypeBreakdown() {
+  const container = $('typeBreakdown');
+  if (!names.length) { container.innerHTML = ''; return; }
+
+  const typeTotal = {}, typeDone = {};
+  names.forEach(e => {
+    const t = getDeviceType(typeof e === 'string' ? e : e.name);
+    typeTotal[t] = (typeTotal[t] || 0) + 1;
+  });
+  dayLog.forEach(e => {
+    const t = getDeviceType(e.nombre);
+    typeDone[t] = (typeDone[t] || 0) + 1;
+  });
+
+  const rows = Object.keys(typeTotal).sort().map(t => {
+    const total = typeTotal[t], done = typeDone[t] || 0;
+    const pct   = Math.round((done / total) * 100);
+    return `<div class="type-row">
+      <span class="type-name">${t}</span>
+      <div class="type-bar-wrap"><div class="type-bar-fill" style="width:${pct}%"></div></div>
+      <span class="type-count">${done}/${total}</span>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = `<div class="type-card">
+    <div class="type-card-head">Avance por tipo</div>${rows}
+  </div>`;
 }
 
 /* ════ Service Worker (PWA) ═══════════════════════════════════ */
