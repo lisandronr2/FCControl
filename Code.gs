@@ -90,8 +90,9 @@ function doGet(e) {
   if (action === 'schema') return respond(handleSchema());
   if (action === 'list')   return respond(handleList());
   if (action === 'get')    return respond(handleGet(e.parameter.nombre || ''));
+  if (action === 'all')    return respond(handleAll());
 
-  return respond({ error: 'Acción no reconocida. Usa: schema, list o get.' });
+  return respond({ error: 'Acción no reconocida. Usa: schema, list, get o all.' });
 }
 
 function handleSchema() {
@@ -161,6 +162,33 @@ function handleGet(nombre) {
     headers: headers.map(h => String(h).trim()),
     estadoOptions
   };
+}
+
+// Devuelve todos los dispositivos en un solo request para caché offline
+function handleAll() {
+  const sheet = getSheet();
+  const { headers, nombreCol, estadoCol } = getSchema(sheet);
+  if (nombreCol === -1) return { error: 'No se encontró columna NOMBRE.' };
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { ok: true, devices: {}, headers: [], estadoOptions: [] };
+
+  const cleanHeaders = headers.map(h => String(h).trim());
+  const allRows      = sheet.getRange(2, 1, lastRow - 1, cleanHeaders.length).getValues();
+  const estadoOptions = estadoCol !== -1 ? getEstadoOptions(sheet, estadoCol) : [];
+
+  const devices = {};
+  allRows.forEach((row, i) => {
+    const nombre = String(row[nombreCol]).trim();
+    if (!nombre) return;
+    const record = {};
+    cleanHeaders.forEach((h, j) => {
+      if (h) record[h] = (row[j] !== undefined && row[j] !== '') ? String(row[j]) : '';
+    });
+    devices[nombre.toLowerCase()] = { result: record, rowIndex: i + 2 };
+  });
+
+  return { ok: true, devices, headers: cleanHeaders, estadoOptions };
 }
 
 // ── POST ──────────────────────────────────────────────────────

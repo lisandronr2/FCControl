@@ -468,6 +468,28 @@ html, body {
 .serial-row { display: flex; gap: 8px; align-items: stretch; }
 .serial-row input { flex: 1; }
 
+/* ══ Sync button ══════════════════════════════════════════════ */
+.sync-btn {
+  background: none; border: none; color: rgba(255,255,255,.75);
+  cursor: pointer; font-size: 18px; padding: 2px 7px; border-radius: 6px;
+  line-height: 1; transition: color .15s;
+}
+.sync-btn:active { background: rgba(255,255,255,.1); }
+.sync-btn.syncing { animation: syncSpin .8s linear infinite; color: #fff; }
+.sync-btn.synced  { color: #3FB06A; }
+@keyframes syncSpin { to { transform: rotate(360deg); } }
+
+/* Barra de estado de caché offline */
+.offline-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 15px; background: var(--paper2); flex-shrink: 0;
+  font-size: 11px; color: var(--gray); border-bottom: .5px solid var(--line);
+  gap: 8px;
+}
+.offline-bar.hidden { display: none; }
+.offline-bar strong { color: var(--ok); }
+.offline-bar.stale strong { color: var(--warn); }
+
 /* ══ Pending badge ════════════════════════════════════════════ */
 .pending-pill {
   background: var(--orange); color: #fff; border-radius: 10px;
@@ -523,6 +545,7 @@ html, body {
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
+      <button id="syncBtn" class="sync-btn" title="Sincronizar datos para uso offline">⟳</button>
       <div class="status-dot" id="statusDot"></div>
       <span class="status-txt" id="statusTxt">Online</span>
     </div>
@@ -539,6 +562,12 @@ html, body {
     <button class="tab-btn active" data-view="search">🔍 Buscar</button>
     <button class="tab-btn"        data-view="summary">📋 Resumen</button>
   </nav>
+
+  <!-- Barra de estado offline -->
+  <div id="offlineBar" class="offline-bar hidden">
+    <span id="offlineBarTxt"></span>
+    <span id="offlineBarTime"></span>
+  </div>
 
   <!-- Filter chips (se genera dinámicamente) -->
   <div id="filterBar" class="filter-bar" style="display:none">
@@ -664,10 +693,14 @@ const apiUrl = 'https://script.google.com/macros/s/AKfycbzliHfGb0zjMXqGRSJf6-gkr
 
 /* ── Claves de almacenamiento local ── */
 const KEYS = {
-  names:     'fcc_names',
-  logDate:   'fcc_log_date',
-  log:       'fcc_log',
-  total:     'fcc_total_devices'
+  names:      'fcc_names',
+  logDate:    'fcc_log_date',
+  log:        'fcc_log',
+  total:      'fcc_total_devices',
+  devicesMap: 'fcc_devices_map',
+  syncTime:   'fcc_sync_time',
+  syncHeaders:'fcc_sync_headers',
+  syncEstado: 'fcc_sync_estado'
 };
 
 /* ── Estado ── */
@@ -703,8 +736,8 @@ function setStatus(online){
   $('statusTxt').textContent = online ? 'Online' : 'Sin red';
   $('saveBtn').disabled = !online;
 }
-window.addEventListener('online',  () => { setStatus(true);  syncPendingQueue(); });
-window.addEventListener('offline', () => setStatus(false));
+window.addEventListener('online',  () => { setStatus(true); syncPendingQueue(); autoSync(); });
+window.addEventListener('offline', () => { setStatus(false); updateOfflineBar(); });
 setStatus(navigator.onLine);
 
 /* ════ Carga de nombres desde el Sheet ════════════════════════ */
@@ -868,12 +901,20 @@ async function loadDevice(nombre){
   try {
     const res  = await fetch(apiUrl + '?action=get&nombre=' + encodeURIComponent(nombre));
     const data = await res.json();
-    if (data.error)      { showToast(data.error, 'err'); return; }
-    if (!data.result)    { showToast('Dispositivo no encontrado en el Sheet.', 'err'); return; }
+    if (data.error)   { showToast(data.error, 'err'); return; }
+    if (!data.result) { showToast('Dispositivo no encontrado en el Sheet.', 'err'); return; }
+    cacheDevice(nombre, data);
     current = { data: data.result, rowIndex: data.rowIndex, headers: data.headers || [], estadoHeader: null };
     renderCard(nombre, data.result, data.headers || [], data.estadoOptions || []);
   } catch(e){
-    showToast('Error de conexión. Verifica tu red.', 'err');
+    const cached = getDeviceFromCache(nombre);
+    if (cached) {
+      current = { data: cached.result, rowIndex: cached.rowIndex, headers: cached.headers || [], estadoHeader: null };
+      renderCard(nombre, cached.result, cached.headers || [], cached.estadoOptions || []);
+      showToast('📥 Sin red — datos desde caché local', '');
+    } else {
+      showToast('Sin red y sin datos guardados para "' + nombre + '". Sincronizá con conexión primero.', 'err');
+    }
   }
 }
 
@@ -1088,6 +1129,98 @@ function renderSummary(){
   ).join('');
 }
 
+/* ════ Caché offline de dispositivos ════════════════════════ */
+function getDevicesMap() {
+  try { return JSON.parse(localStorage.getItem(KEYS.devicesMap) || '{}'); } catch(e) { return {}; }
+}
+
+function cacheDevice(nombre, data) {
+  const map = getDevicesMap();
+  map[nombre.toLowerCase()] = {
+    result:       data.result,
+    rowIndex:     data.rowIndex,
+    headers:      data.headers || [],
+    estadoOptions: data.estadoOptions || []
+  };
+  localStorage.setItem(KEYS.devicesMap, JSON.stringify(map));
+}
+
+function getDeviceFromCache(nombre) {
+  // Busca exacto primero, luego parcial
+  const map = getDevicesMap();
+  const q   = nombre.trim().toLowerCase();
+  if (map[q]) return map[q];
+  const key = Object.keys(map).find(k => k.includes(q) || q.includes(k));
+  return key ? map[key] : null;
+}
+
+let syncing = false;
+async function syncAllDevices() {
+  if (syncing || !navigator.onLine) return;
+  syncing = true;
+  const btn = $('syncBtn');
+  btn.classList.add('syncing');
+  showToast('Descargando datos para uso offline…');
+  try {
+    const res  = await fetch(apiUrl + '?action=all');
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Error en el servidor');
+
+    // Enriquecer cada entrada con headers y estadoOptions
+    const map = {};
+    Object.entries(data.devices).forEach(([key, dev]) => {
+      map[key] = { ...dev, headers: data.headers, estadoOptions: data.estadoOptions || [] };
+    });
+
+    localStorage.setItem(KEYS.devicesMap,  JSON.stringify(map));
+    localStorage.setItem(KEYS.syncHeaders, JSON.stringify(data.headers));
+    localStorage.setItem(KEYS.syncEstado,  JSON.stringify(data.estadoOptions || []));
+    localStorage.setItem(KEYS.syncTime,    String(Date.now()));
+
+    const count = Object.keys(map).length;
+    showToast('✓ ' + count + ' dispositivos guardados para uso offline', 'ok');
+    btn.classList.remove('syncing');
+    btn.classList.add('synced');
+    setTimeout(() => btn.classList.remove('synced'), 3000);
+    updateOfflineBar();
+  } catch(e) {
+    showToast('Error al sincronizar: ' + (e.message || 'sin conexión'), 'err');
+    btn.classList.remove('syncing');
+  }
+  syncing = false;
+}
+
+function updateOfflineBar() {
+  const bar      = $('offlineBar');
+  const txtEl    = $('offlineBarTxt');
+  const timeEl   = $('offlineBarTime');
+  const syncTime = parseInt(localStorage.getItem(KEYS.syncTime) || '0');
+  const count    = Object.keys(getDevicesMap()).length;
+
+  if (!count) { bar.classList.add('hidden'); return; }
+
+  const mins  = Math.round((Date.now() - syncTime) / 60000);
+  const hours = Math.round(mins / 60);
+  const timeStr = mins < 1 ? 'ahora mismo'
+    : mins < 60 ? 'hace ' + mins + ' min'
+    : 'hace ' + hours + ' h';
+
+  const stale = mins > 240; // > 4 horas
+  bar.classList.toggle('stale', stale);
+  bar.classList.remove('hidden');
+  txtEl.innerHTML  = '<strong>' + count + ' dispositivos</strong> guardados offline';
+  timeEl.textContent = timeStr;
+}
+
+// Auto-sync: descarga todo si nunca se sincronizó o si pasaron más de 4 horas
+async function autoSync() {
+  if (!navigator.onLine) return;
+  const last = parseInt(localStorage.getItem(KEYS.syncTime) || '0');
+  if (Date.now() - last > 4 * 60 * 60 * 1000) syncAllDevices();
+}
+
+$('syncBtn').addEventListener('click', syncAllDevices);
+
 /* ════ Tipo de dispositivo ═══════════════════════════════════ */
 function getDeviceType(name) {
   const m = String(name).match(/^[A-Z]+/);
@@ -1221,10 +1354,11 @@ async function syncPendingQueue() {
   if (failed.length) showToast(failed.length + ' no pudieron sincronizarse', 'err');
 }
 
-// Inicializar badge al cargar
+// Inicializar al cargar
 updatePendingBadge();
-// Inicializar chips si hay nombres en caché
+updateOfflineBar();
 if (names.length) buildFilterChips();
+autoSync();
 
 /* ════ Breakdown por tipo ════════════════════════════════════ */
 function renderTypeBreakdown() {
