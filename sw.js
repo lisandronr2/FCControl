@@ -1,29 +1,34 @@
-const CACHE = 'fccontrol-v1';
+// ── Incrementar CACHE_VERSION en cada nuevo deploy ────────────
+const CACHE_VERSION = 'v2';
+const CACHE_NAME    = 'fccontrol-' + CACHE_VERSION;
 const SHELL = ['./index.html', './manifest.json', './icon.svg'];
 
-self.addEventListener('install', (event) => {
+self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(SHELL))
+    caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL))
   );
-  self.skipWaiting();
+  // Sin skipWaiting: el nuevo SW espera hasta que el usuario confirme
 });
 
-self.addEventListener('activate', (event) => {
+self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    )
+    caches.keys()
+      .then(keys => Promise.all(
+        keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
+      ))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Solo cacheamos el "cascarón" de la app. Las búsquedas a Google Sheets
-// siempre van directo a la red para no mostrar datos viejos.
-self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
-  if (SHELL.some((p) => url.pathname.endsWith(p.replace('./', '')))) {
-    event.respondWith(
-      caches.match(event.request).then((cached) => cached || fetch(event.request))
-    );
-  }
+// La página envía SKIP_WAITING cuando el usuario hace clic en "Actualizar"
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+self.addEventListener('fetch', event => {
+  // Peticiones externas (Apps Script, Google Fonts) → directo a la red
+  if (!event.request.url.startsWith(self.location.origin)) return;
+  event.respondWith(
+    caches.match(event.request).then(cached => cached || fetch(event.request))
+  );
 });

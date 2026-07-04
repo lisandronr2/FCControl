@@ -365,6 +365,27 @@ html, body {
 .log-empty { text-align: center; color: var(--gray); padding: 20px 0; font-size: 13px; }
 
 
+/* ══ Update banner ════════════════════════════════════════════ */
+.update-banner {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 15px; background: var(--blue3); color: #fff;
+  font-size: 13px; gap: 10px; flex-shrink: 0;
+  animation: slideDown .25s ease;
+}
+.update-banner.hidden { display: none; }
+.update-btn {
+  background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.4);
+  color: #fff; border-radius: 6px; padding: 5px 13px;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 13px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  cursor: pointer; white-space: nowrap;
+}
+.update-btn:active { background: rgba(255,255,255,.32); }
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* ══ Toast ════════════════════════════════════════════════════ */
 .toast {
   position: fixed; bottom: 22px; left: 50%;
@@ -397,6 +418,12 @@ html, body {
       <span class="status-txt" id="statusTxt">Online</span>
     </div>
   </header>
+
+  <!-- Banner de actualización (oculto por defecto) -->
+  <div id="updateBanner" class="update-banner hidden">
+    <span>🔄 Nueva versión disponible</span>
+    <button id="updateBtn" class="update-btn">Actualizar</button>
+  </div>
 
   <!-- Tabs -->
   <nav class="tabs">
@@ -936,8 +963,42 @@ function renderSummary(){
 }
 
 /* ════ Service Worker (PWA) ═══════════════════════════════════ */
-if ('serviceWorker' in navigator)
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('./sw.js');
+
+      function offerUpdate(registration) {
+        const banner = $('updateBanner');
+        const btn    = $('updateBtn');
+        banner.classList.remove('hidden');
+        btn.onclick = () => {
+          if (registration.waiting)
+            registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        };
+      }
+
+      // SW ya estaba esperando (ej: página recargada sin actualizar antes)
+      if (reg.waiting) offerUpdate(reg);
+
+      // Nuevo SW encontrado durante esta sesión
+      reg.addEventListener('updatefound', () => {
+        const sw = reg.installing;
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'installed' && navigator.serviceWorker.controller)
+            offerUpdate(reg);
+        });
+      });
+
+      // Cuando el SW activa tras skipWaiting → recarga para servir versión nueva
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!refreshing) { refreshing = true; window.location.reload(); }
+      });
+
+    } catch (e) { /* sin SW: la app funciona igual, solo sin offline */ }
+  });
+}
 </script>
 </body>
 </html>
