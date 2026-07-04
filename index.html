@@ -81,11 +81,6 @@ html, body {
 }
 .status-dot.offline { background: #E04040; box-shadow: 0 0 0 3px rgba(224,64,64,.22); }
 .status-txt { font-size: 11px; color: rgba(255,255,255,.75); }
-.cfg-btn {
-  background: none; border: none; color: rgba(255,255,255,.75);
-  cursor: pointer; font-size: 20px; padding: 2px 6px; border-radius: 6px; line-height: 1;
-}
-.cfg-btn:active { background: rgba(255,255,255,.1); }
 
 /* ══ Tabs ════════════════════════════════════════════════════ */
 .tabs {
@@ -369,43 +364,6 @@ html, body {
 .log-entry-sub { color: var(--gray); margin-top: 2px; line-height: 1.4; }
 .log-empty { text-align: center; color: var(--gray); padding: 20px 0; font-size: 13px; }
 
-/* ══ Setup overlay ════════════════════════════════════════════ */
-.setup-overlay {
-  position: fixed; inset: 0; background: var(--paper);
-  z-index: 100; display: flex; align-items: center; justify-content: center; padding: 24px;
-}
-.setup-overlay.hidden { display: none; }
-.setup-card {
-  width: 100%; max-width: 400px; background: var(--white);
-  border: 1.5px solid var(--ink); border-radius: 14px; padding: 26px 22px;
-}
-.setup-title {
-  font-family: 'Barlow Condensed', sans-serif;
-  font-size: 26px; font-weight: 700; text-transform: uppercase; margin-bottom: 6px;
-}
-.setup-desc { font-size: 13px; color: var(--gray); line-height: 1.6; margin-bottom: 16px; }
-.setup-lbl { display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--gray); margin-bottom: 5px; }
-.setup-input {
-  width: 100%; border: 1.5px solid var(--line); border-radius: 8px;
-  padding: 11px 12px; font-family: var(--mono); font-size: 12px;
-  background: var(--paper); color: var(--ink); outline: none; margin-bottom: 6px;
-}
-.setup-input:focus { border-color: var(--blue3); background: var(--white); }
-.setup-err { font-size: 12px; color: var(--red); margin-bottom: 10px; display: none; }
-.setup-err.show { display: block; }
-.setup-save {
-  width: 100%; background: var(--blue); color: #fff; border: none;
-  border-radius: 9px; padding: 13px;
-  font-family: 'Barlow Condensed', sans-serif;
-  font-size: 17px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .04em; cursor: pointer;
-}
-.setup-save:active { background: var(--blue2); }
-.setup-steps {
-  font-size: 12px; color: var(--gray); margin-top: 16px; line-height: 1.7;
-  border-top: .5px solid var(--line); padding-top: 12px;
-}
-.setup-steps b { color: var(--ink); }
 
 /* ══ Toast ════════════════════════════════════════════════════ */
 .toast {
@@ -425,26 +383,6 @@ html, body {
 </head>
 <body>
 
-<!-- ════════════════ SETUP ════════════════ -->
-<div id="setupOverlay" class="setup-overlay hidden">
-  <div class="setup-card">
-    <div class="setup-title">FCControl</div>
-    <p class="setup-desc">Conecta con tu Google Sheet <strong>CAMARAS</strong> pegando la URL de tu Apps Script publicado.</p>
-    <label class="setup-lbl" for="apiInput">URL de Apps Script</label>
-    <input id="apiInput" class="setup-input" type="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
-    <div id="setupErr" class="setup-err"></div>
-    <button id="setupSave" class="setup-save">Conectar</button>
-    <div class="setup-steps">
-      <b>Cómo obtener la URL:</b><br>
-      1. Abre tu Google Sheet CAMARAS<br>
-      2. Extensiones → Apps Script → pega el archivo Code.gs<br>
-      3. Implementar → Nueva implementación → App web<br>
-      4. Acceso: <b>Cualquier usuario</b> → Implementar<br>
-      5. Copia la URL y pégala arriba
-    </div>
-  </div>
-</div>
-
 <!-- ════════════════ APP ════════════════ -->
 <div class="frame">
 
@@ -457,7 +395,6 @@ html, body {
     <div class="topbar-right">
       <div class="status-dot" id="statusDot"></div>
       <span class="status-txt" id="statusTxt">Online</span>
-      <button class="cfg-btn" id="cfgBtn" title="Configuración">⚙</button>
     </div>
   </header>
 
@@ -485,7 +422,7 @@ html, body {
     <!-- Estado vacío -->
     <div id="emptyState" class="empty-state">
       <div class="empty-icon">📷</div>
-      <div class="empty-txt">Escribe el nombre (o parte de él) para buscar un dispositivo en tu Google Sheet CAMARAS.</div>
+      <div class="empty-txt">Escribe el nombre (o parte de él) para buscar un dispositivo.</div>
     </div>
 
     <!-- Ficha del dispositivo -->
@@ -576,17 +513,18 @@ html, body {
    ════════════════════════════════════════════════════════════ */
 const $ = id => document.getElementById(id);
 
+/* ── Backend URL (fija) ── */
+const apiUrl = 'https://script.google.com/macros/s/AKfycbzliHfGb0zjMXqGRSJf6-gkrUzT-OrslMGLXv91y-eClSmqxnINro84pjo4NDFyrbSuAg/exec';
+
 /* ── Claves de almacenamiento local ── */
 const KEYS = {
-  api:       'fcc_api_url',
-  names:     'fcc_names',         // [{name, row}]
+  names:     'fcc_names',
   logDate:   'fcc_log_date',
-  log:       'fcc_log',           // [{nombre, serial, tecnico, time}]
-  total:     'fcc_total_devices'  // total de dispositivos del Sheet
+  log:       'fcc_log',
+  total:     'fcc_total_devices'
 };
 
 /* ── Estado ── */
-let apiUrl  = localStorage.getItem(KEYS.api) || '';
 let names   = [];    // [{name:string, row:number}]
 let dayLog  = [];
 let current = null;  // {data: {}, rowIndex: number, headers:[]}
@@ -622,32 +560,6 @@ function setStatus(online){
 window.addEventListener('online',  () => setStatus(true));
 window.addEventListener('offline', () => setStatus(false));
 setStatus(navigator.onLine);
-
-/* ════ Setup ══════════════════════════════════════════════════ */
-function showSetup(errMsg){
-  $('apiInput').value = apiUrl || '';
-  const errEl = $('setupErr');
-  errEl.textContent = errMsg || '';
-  errEl.classList.toggle('show', !!errMsg);
-  $('setupOverlay').classList.remove('hidden');
-}
-function hideSetup(){ $('setupOverlay').classList.add('hidden'); }
-
-$('cfgBtn').addEventListener('click', () => showSetup());
-$('setupSave').addEventListener('click', async () => {
-  const v = $('apiInput').value.trim();
-  if (!v.startsWith('https://script.google.com/')){
-    $('setupErr').textContent = 'Pega la URL completa de Apps Script (https://script.google.com/…)';
-    $('setupErr').classList.add('show');
-    return;
-  }
-  apiUrl = v;
-  localStorage.setItem(KEYS.api, apiUrl);
-  hideSetup();
-  await loadNames();
-});
-
-if (!apiUrl) showSetup();
 
 /* ════ Carga de nombres desde el Sheet ════════════════════════ */
 async function loadNames(){
@@ -721,7 +633,7 @@ function renderDropdown(){
   if (!q){ dropdown.classList.remove('open'); return; }
 
   if (!names.length){
-    dropdown.innerHTML = '<div class="dd-empty">Conecta primero con tu Google Sheet en ⚙ Configuración.</div>';
+    dropdown.innerHTML = '<div class="dd-empty">Cargando lista de dispositivos…</div>';
     dropdown.classList.add('open');
     return;
   }
@@ -802,7 +714,6 @@ searchInput.addEventListener('keydown', e => {
 
 /* ════ Cargar dispositivo desde el Sheet ═════════════════════ */
 async function loadDevice(nombre){
-  if (!apiUrl){ showSetup('Configura primero la URL de tu Apps Script.'); return; }
   showToast('Cargando…');
   try {
     const res  = await fetch(apiUrl + '?action=get&nombre=' + encodeURIComponent(nombre));
@@ -921,7 +832,6 @@ function renderCard(nombre, record, headers, estadoOptions){
 /* ════ Guardar serial en el Sheet ════════════════════════════ */
 $('saveBtn').addEventListener('click', async () => {
   if (!current){ showToast('Selecciona un dispositivo primero.', 'err'); return; }
-  if (!apiUrl) { showSetup('Configura la URL de Apps Script.'); return; }
 
   const serial = $('fSerial').value.trim();
   if (!serial){
