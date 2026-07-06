@@ -936,12 +936,18 @@ function findEstadoHeader(headers){
   });
 }
 
+// Encuentra el encabezado exacto (case-insensitive) que coincida con alguno de los candidatos
+function findHeaderKey(headers, candidates){
+  return headers.find(h => candidates.includes(h.toUpperCase().trim()));
+}
+
 function renderCard(nombre, record, headers, estadoOptions){
   $('cardName').textContent = nombre;
 
   // Chips
   const done = dayLog.some(l => l.nombre === nombre);
-  const serialVal = record['SERIAL'] || record['SERIAL NUMBER'] || '';
+  const serialHeader = findHeaderKey(headers, ['SERIAL','SERIAL NUMBER']);
+  const serialVal = serialHeader ? (record[serialHeader] || '') : '';
   const hasSN  = serialVal && !serialVal.toUpperCase().includes('PENDING');
   const chips  = [];
   if (done)        chips.push('<span class="chip chip-done">✓ Capturado hoy</span>');
@@ -955,8 +961,11 @@ function renderCard(nombre, record, headers, estadoOptions){
 
   $('cardChips').innerHTML = chips.join('');
 
-  // Guarda referencia del encabezado de Estado para poder guardar después
-  if (current) current.estadoHeader = estadoHeader || null;
+  // Guarda referencia de los encabezados para poder guardar después
+  if (current) {
+    current.estadoHeader = estadoHeader || null;
+    current.serialHeader = serialHeader || null;
+  }
 
   // Selector de Estado (editable, con las opciones asignadas en el Sheet)
   const estadoWrap = $('estadoField');
@@ -1011,7 +1020,8 @@ function renderCard(nombre, record, headers, estadoOptions){
   $('fTech').value = '';
 
   // Fecha última actualización
-  const fechaVal = record['FECHA'] || record['DATE'] || record['UPDATED'] || '';
+  const fechaHeader = findHeaderKey(headers, ['FECHA','DATE','UPDATED']);
+  const fechaVal = fechaHeader ? (record[fechaHeader] || '') : '';
   $('cardFecha').textContent = fechaVal || 'Sin registro';
 
   // Mostrar ficha
@@ -1062,8 +1072,7 @@ $('saveBtn').addEventListener('click', async () => {
       $('cardChips').innerHTML = chips.join('');
 
       // Actualizar caché de current
-      if (current.data['SERIAL'])        current.data['SERIAL']        = serial;
-      if (current.data['SERIAL NUMBER']) current.data['SERIAL NUMBER'] = serial;
+      if (current.serialHeader) current.data[current.serialHeader] = serial;
       if (current.estadoHeader && data.estado) current.data[current.estadoHeader] = data.estado;
 
       // Log diario
