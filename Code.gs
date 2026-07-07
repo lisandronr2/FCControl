@@ -242,6 +242,9 @@ function handleSave(data) {
     if ((upper.includes('TECNICO') || upper.includes('TÉCNICO') || upper === 'VERIFIED BY') && data.tecnico) {
       sheet.getRange(rowIndex, i + 1).setValue(data.tecnico.trim());
     }
+    if (upper.includes('MAC') && data.mac && data.mac.trim()) {
+      sheet.getRange(rowIndex, i + 1).setValue(data.mac.trim());
+    }
   });
 
   return {
@@ -249,6 +252,7 @@ function handleSave(data) {
     nombre: data.nombre,
     serial: data.serial,
     estado: (estadoCol !== -1 && data.estado) ? data.estado.trim() : '',
+    mac: data.mac ? data.mac.trim() : '',
     fecha: stamp,
     rowIndex
   };

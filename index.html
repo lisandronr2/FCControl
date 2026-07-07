@@ -519,6 +519,78 @@ html, body {
 .type-bar-wrap { flex: 1; height: 6px; background: var(--paper2); border-radius: 3px; overflow: hidden; }
 .type-bar-fill  { height: 100%; background: var(--orange); border-radius: 3px; transition: width .4s; }
 .type-count { font-size: 11px; color: var(--gray); white-space: nowrap; min-width: 44px; text-align: right; }
+
+/* ══ Configurar cámara ════════════════════════════════════════ */
+.camcfg-btn {
+  width: 100%; background: none; color: var(--blue);
+  border: 1.5px solid var(--blue); border-radius: 10px; padding: 11px;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 15px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  cursor: pointer; margin-top: 10px; transition: background .12s;
+}
+.camcfg-btn:active { background: var(--paper2); }
+
+.camcfg-modal {
+  position: fixed; inset: 0; background: rgba(28,26,23,.55);
+  z-index: 250; display: flex; align-items: flex-end; justify-content: center;
+}
+.camcfg-modal.hidden { display: none; }
+.camcfg-card {
+  width: 100%; max-width: 430px; max-height: 88vh; overflow-y: auto;
+  background: var(--paper); border-radius: 18px 18px 0 0;
+  padding: 18px 16px 26px; animation: slideUp .2s ease;
+}
+@keyframes slideUp { from { transform: translateY(24px); opacity:.4; } to { transform: translateY(0); opacity:1; } }
+
+.camcfg-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.camcfg-title {
+  font-family: 'Barlow Condensed', sans-serif; font-size: 22px;
+  font-weight: 700; text-transform: uppercase;
+}
+.camcfg-close {
+  background: none; border: none; font-size: 18px; color: var(--gray);
+  cursor: pointer; padding: 4px 8px;
+}
+
+.camcfg-warn {
+  background: #FEF3E1; color: #8A5A06; border-radius: 10px;
+  padding: 10px 12px; font-size: 12px; line-height: 1.5; margin-bottom: 14px;
+}
+
+.camcfg-step { display: flex; gap: 10px; margin-bottom: 16px; }
+.camcfg-step-n {
+  flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%;
+  background: var(--ink); color: var(--paper);
+  font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+}
+.camcfg-step-body { flex: 1; min-width: 0; }
+.camcfg-step-title {
+  font-family: 'Barlow Condensed', sans-serif; font-size: 15px;
+  font-weight: 700; text-transform: uppercase; margin-bottom: 2px;
+}
+.camcfg-step-desc { font-size: 11px; color: var(--gray); margin-bottom: 8px; line-height: 1.4; }
+
+.copy-row { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+.copy-row:last-child { margin-bottom: 0; }
+.copy-lbl {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--gray);
+  width: 62px; flex-shrink: 0;
+}
+.copy-field {
+  flex: 1; min-width: 0; border: 1.5px solid var(--line); border-radius: 8px;
+  padding: 9px 11px; font-family: var(--mono); font-size: 13px;
+  background: var(--white); color: var(--ink); outline: none;
+}
+.copy-field:focus { border-color: var(--blue3); }
+.copy-btn {
+  flex-shrink: 0; background: var(--blue); color: #fff; border: none;
+  border-radius: 8px; padding: 9px 12px; font-size: 15px; cursor: pointer;
+  transition: background .12s;
+}
+.copy-btn.wide { font-family: 'Barlow Condensed', sans-serif; font-size: 13px; font-weight: 700; text-transform: uppercase; padding: 9px 14px; }
+.copy-btn:active { background: var(--blue2); }
+.copy-btn.copied { background: var(--ok); }
 </style>
 </head>
 <body>
@@ -532,6 +604,83 @@ html, body {
   </div>
   <div class="scan-hint">Apuntá la cámara al código de barras o QR del serial</div>
   <button id="scanCancel" class="scan-cancel-btn">Cancelar</button>
+</div>
+
+<!-- ════════════════ CONFIGURAR CÁMARA ════════════════ -->
+<div id="camCfgModal" class="camcfg-modal hidden">
+  <div class="camcfg-card">
+    <div class="camcfg-head">
+      <div class="camcfg-title">Configurar cámara</div>
+      <button id="camCfgClose" class="camcfg-close">✕</button>
+    </div>
+    <div class="camcfg-warn">
+      ⚠ Esto <strong>no</strong> configura la cámara automáticamente. Conectá el teléfono a la red/WiFi de la cámara y usá estos datos en su panel web.
+    </div>
+
+    <div class="camcfg-step">
+      <div class="camcfg-step-n">1</div>
+      <div class="camcfg-step-body">
+        <div class="camcfg-step-title">Acceder al panel de la cámara</div>
+        <div class="camcfg-step-desc">IP de fábrica o actual de la cámara (editable si es distinta)</div>
+        <div class="copy-row">
+          <input id="camAccessIp" class="copy-field" type="text" value="192.168.1.64" inputmode="decimal">
+          <button id="camOpenBtn" class="copy-btn wide">Abrir panel ↗</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="camcfg-step">
+      <div class="camcfg-step-n">2</div>
+      <div class="camcfg-step-body">
+        <div class="camcfg-step-title">Datos de red objetivo (del Sheet)</div>
+        <div class="copy-row">
+          <label class="copy-lbl">IP</label>
+          <input id="camTargetIp" class="copy-field" type="text" readonly>
+          <button class="copy-btn" data-copy="camTargetIp">📋</button>
+        </div>
+        <div class="copy-row">
+          <label class="copy-lbl">Máscara</label>
+          <input id="camTargetMask" class="copy-field" type="text" readonly>
+          <button class="copy-btn" data-copy="camTargetMask">📋</button>
+        </div>
+        <div class="copy-row">
+          <label class="copy-lbl">Gateway</label>
+          <input id="camTargetGw" class="copy-field" type="text" readonly>
+          <button class="copy-btn" data-copy="camTargetGw">📋</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="camcfg-step">
+      <div class="camcfg-step-n">3</div>
+      <div class="camcfg-step-body">
+        <div class="camcfg-step-title">Credenciales a configurar</div>
+        <div class="copy-row">
+          <label class="copy-lbl">Usuario</label>
+          <input id="camUser" class="copy-field" type="text" readonly>
+          <button class="copy-btn" data-copy="camUser">📋</button>
+        </div>
+        <div class="copy-row">
+          <label class="copy-lbl">Contraseña</label>
+          <input id="camPass" class="copy-field" type="text" readonly>
+          <button class="copy-btn" data-copy="camPass">📋</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="camcfg-step" id="camMacStep">
+      <div class="camcfg-step-n">4</div>
+      <div class="camcfg-step-body">
+        <div class="camcfg-step-title">Dirección MAC</div>
+        <div class="camcfg-step-desc">Copiá la MAC que muestra el panel de la cámara (Red → Básico)</div>
+        <div class="copy-row">
+          <input id="camMacInput" class="copy-field" type="text" placeholder="Ej. 44:19:B6:XX:XX:XX" autocapitalize="characters" autocomplete="off">
+          <button id="camMacSave" class="copy-btn wide">Guardar</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
 </div>
 
 <!-- ════════════════ APP ════════════════ -->
@@ -609,6 +758,8 @@ html, body {
       <!-- Datos leídos del Sheet (generados dinámicamente) -->
       <div class="sec-title">Datos del dispositivo</div>
       <div class="data-grid" id="dataGrid"></div>
+
+      <button id="camCfgBtn" class="camcfg-btn">🛠 Configurar cámara</button>
 
       <!-- Captura de serial -->
       <hr class="perf">
@@ -1029,6 +1180,102 @@ function renderCard(nombre, record, headers, estadoOptions){
   $('devCard').classList.add('visible');
   if (!hasSN) setTimeout(() => snInput.focus(), 120);
 }
+
+/* ════ Configurar cámara (modo asistido) ══════════════════════
+   La app NO puede conectarse directo a la cámara ni leer su MAC:
+   los navegadores bloquean llamadas HTTP desde una página HTTPS
+   (contenido mixto) y no exponen la MAC por seguridad/privacidad.
+   Este modal arma los datos y abre el panel nativo de la cámara
+   para que el técnico los pegue manualmente. ═══════════════════ */
+const CAM_CREDS = { user: 'admin', pass: 'Elecnor2020ING!' };
+const LAST_CAM_IP_KEY = 'fcc_last_cam_access_ip';
+
+$('camCfgBtn').addEventListener('click', openCamConfig);
+$('camCfgClose').addEventListener('click', closeCamConfig);
+$('camCfgModal').addEventListener('click', e => {
+  if (e.target.id === 'camCfgModal') closeCamConfig();
+});
+
+function openCamConfig(){
+  if (!current){ showToast('Selecciona un dispositivo primero.', 'err'); return; }
+
+  const headers = current.headers || [];
+  const ipHeader   = findHeaderKey(headers, ['IP','IP ADDRESS']);
+  const maskHeader = findHeaderKey(headers, ['MASCARA','MÁSCARA','SUBNET','MASK']);
+  const gwHeader   = findHeaderKey(headers, ['GATEWAY','GW']);
+  const macHeader  = findHeaderKey(headers, ['MAC','MAC ADDRESS']);
+
+  $('camTargetIp').value   = ipHeader   ? (current.data[ipHeader]   || '—') : '—';
+  $('camTargetMask').value = maskHeader ? (current.data[maskHeader] || '—') : '—';
+  $('camTargetGw').value   = gwHeader   ? (current.data[gwHeader]   || '—') : '—';
+  $('camUser').value = CAM_CREDS.user;
+  $('camPass').value = CAM_CREDS.pass;
+
+  $('camAccessIp').value = localStorage.getItem(LAST_CAM_IP_KEY) || '192.168.1.64';
+
+  current.macHeader = macHeader || null;
+  $('camMacInput').value = macHeader ? (current.data[macHeader] || '') : '';
+  $('camMacStep').style.display = macHeader ? '' : 'none';
+
+  $('camCfgModal').classList.remove('hidden');
+}
+
+function closeCamConfig(){
+  $('camCfgModal').classList.add('hidden');
+}
+
+$('camOpenBtn').addEventListener('click', () => {
+  const ip = $('camAccessIp').value.trim();
+  if (!ip){ showToast('Escribí la IP de la cámara.', 'err'); return; }
+  localStorage.setItem(LAST_CAM_IP_KEY, ip);
+  window.open('http://' + ip + '/', '_blank');
+});
+
+document.querySelectorAll('.copy-btn[data-copy]').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const input = $(btn.dataset.copy);
+    const val = input.value;
+    if (!val || val === '—'){ showToast('Sin valor para copiar.', 'err'); return; }
+    try {
+      await navigator.clipboard.writeText(val);
+    } catch(e){
+      input.select();
+      document.execCommand('copy');
+    }
+    btn.classList.add('copied');
+    setTimeout(() => btn.classList.remove('copied'), 1200);
+    showToast('✓ Copiado', 'ok');
+  });
+});
+
+$('camMacSave').addEventListener('click', async () => {
+  if (!current){ return; }
+  const mac = $('camMacInput').value.trim();
+  if (!mac){ showToast('Escribí la MAC antes de guardar.', 'err'); return; }
+  if (!current.macHeader){ showToast('El Sheet no tiene columna MAC.', 'err'); return; }
+
+  try {
+    const res = await fetch(apiUrl, {
+      method:  'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body:    JSON.stringify({
+        nombre:   $('cardName').textContent,
+        serial:   ($('fSerial').value || current.data[current.serialHeader] || '').trim() || 'PENDING',
+        mac,
+        rowIndex: current.rowIndex
+      })
+    });
+    const data = await res.json();
+    if (data.ok){
+      current.data[current.macHeader] = mac;
+      showToast('✓ MAC guardada en el Sheet', 'ok');
+    } else {
+      showToast(data.error || 'No se pudo guardar la MAC.', 'err');
+    }
+  } catch(e){
+    showToast('Sin red — no se pudo guardar la MAC.', 'err');
+  }
+});
 
 /* ════ Guardar serial en el Sheet ════════════════════════════ */
 $('saveBtn').addEventListener('click', async () => {
