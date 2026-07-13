@@ -1306,7 +1306,7 @@ $('saveBtn').addEventListener('click', async () => {
     const res  = await fetch(apiUrl, {
       method:  'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body:    JSON.stringify({ nombre, serial, tecnico, estado, rowIndex: current.rowIndex })
+      body:    JSON.stringify({ nombre, serial, mac: ($('camMacInput').value || '').trim().toUpperCase().replace(/-/g, ':') || undefined, tecnico, estado, rowIndex: current.rowIndex })
     });
     const data = await res.json();
 
@@ -1333,7 +1333,7 @@ $('saveBtn').addEventListener('click', async () => {
       showToast(data.error || 'No se pudo guardar.', 'err');
     }
   } catch(e){
-    addToPendingQueue({ nombre, serial, tecnico, estado, rowIndex: current.rowIndex });
+    addToPendingQueue({ nombre, serial, mac: ($('camMacInput').value || '').trim().toUpperCase().replace(/-/g, ':') || undefined, tecnico, estado, rowIndex: current.rowIndex });
     showToast('Sin red — guardado en cola local 📥', '');
   } finally {
     btn.classList.remove('saving');
