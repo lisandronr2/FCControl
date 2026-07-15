@@ -108,6 +108,21 @@ html, body {
   color: var(--gray); margin-bottom: 6px;
 }
 
+/* ══ Selector de columna de búsqueda ═════════════════════════ */
+.searchby-row { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.searchby-lbl {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--gray); margin-right: 2px;
+}
+.searchby-chip {
+  padding: 4px 11px; border-radius: 20px;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 12.5px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  border: 1.5px solid var(--ink); background: transparent;
+  color: var(--ink); cursor: pointer; white-space: nowrap; transition: background .12s;
+}
+.searchby-chip.active { background: var(--ink); color: var(--paper); }
+
 /* ══ Buscador con desplegable ════════════════════════════════ */
 .search-wrap { position: relative; margin-bottom: 4px; }
 
@@ -155,6 +170,7 @@ html, body {
   background: #FFD166; color: var(--ink);
   border-radius: 2px; padding: 0 1px;
 }
+.dd-sub { font-weight: 400; color: var(--gray); font-size: 12px; }
 .dd-badge {
   font-size: 10px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .04em; padding: 2px 7px; border-radius: 10px;
@@ -726,7 +742,14 @@ html, body {
   <!-- ══ Vista: Búsqueda ══ -->
   <div id="view-search" class="view">
 
-    <label class="lbl" for="searchInput">Nombre del dispositivo</label>
+    <div class="searchby-row" id="searchByRow">
+      <span class="searchby-lbl">Buscar por:</span>
+      <button type="button" class="searchby-chip active" data-col="NOMBRE">Nombre</button>
+      <button type="button" class="searchby-chip" data-col="CT">CT</button>
+      <button type="button" class="searchby-chip" data-col="UBICACION">Ubicación</button>
+    </div>
+
+    <label class="lbl" for="searchInput" id="searchLbl">Nombre del dispositivo</label>
     <div class="search-wrap">
       <div class="search-box">
         <span class="search-icon">🔍</span>
@@ -741,7 +764,7 @@ html, body {
     <!-- Estado vacío -->
     <div id="emptyState" class="empty-state">
       <div class="empty-icon">📷</div>
-      <div class="empty-txt">Escribe el nombre (o parte de él) para buscar un dispositivo.</div>
+      <div class="empty-txt" id="emptyTxt">Escribe el nombre (o parte de él) para buscar un dispositivo.</div>
     </div>
 
     <!-- Ficha del dispositivo -->
@@ -855,7 +878,7 @@ const KEYS = {
 };
 
 /* ── Estado ── */
-let names   = [];    // [{name:string, row:number}]
+let names   = [];    // [{name:string, ct:string, ubicacion:string, row:number}]
 let dayLog  = [];
 let current = null;  // {data: {}, rowIndex: number, headers:[]}
 let totalDevices = parseInt(localStorage.getItem(KEYS.total) || '0', 10);
@@ -930,6 +953,39 @@ function highlight(text, q){
   return text.replace(re, '<mark>$1</mark>');
 }
 
+/* ════ Selector de columna de búsqueda ═════════════════════════ */
+let searchCol = 'NOMBRE'; // 'NOMBRE' | 'CT' | 'UBICACION'
+const SEARCH_COL_LABELS = { NOMBRE: 'nombre', CT: 'CT', UBICACION: 'ubicación' };
+
+function fieldForSearch(entry){
+  if (typeof entry === 'string') return entry;
+  if (searchCol === 'CT')        return entry.ct        || '';
+  if (searchCol === 'UBICACION') return entry.ubicacion  || '';
+  return entry.name || '';
+}
+
+function updateSearchLabels(){
+  const lbl = SEARCH_COL_LABELS[searchCol];
+  $('searchLbl').textContent  = (searchCol === 'NOMBRE' ? 'Nombre' : lbl.toUpperCase()) + ' del dispositivo';
+  $('searchInput').placeholder = 'Escribe ' + lbl + ' para buscar…';
+  $('emptyTxt').textContent   = 'Escribe ' + lbl + ' (o parte) para buscar un dispositivo.';
+}
+
+document.querySelectorAll('.searchby-chip').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.col === searchCol) return;
+    document.querySelectorAll('.searchby-chip').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    searchCol = btn.dataset.col;
+    updateSearchLabels();
+    searchInput.value = '';
+    clearBtn.classList.remove('show');
+    dropdown.classList.remove('open');
+    dropdown.innerHTML = '';
+    searchInput.focus();
+  });
+});
+
 /* ════ Dropdown ═══════════════════════════════════════════════ */
 const searchInput = $('searchInput');
 const dropdown    = $('dropdown');
@@ -974,10 +1030,11 @@ function renderDropdown(){
 
   const scored = pool
     .map(entry => {
-      const n     = typeof entry === 'string' ? entry : entry.name;
-      const row   = typeof entry === 'object' ? entry.row : null;
-      const score = fuzzyScore(n, q);
-      return { name: n, row, score };
+      const n         = typeof entry === 'string' ? entry : entry.name;
+      const row       = typeof entry === 'object' ? entry.row : null;
+      const matchText = fieldForSearch(entry);
+      const score     = matchText ? fuzzyScore(matchText, q) : -1;
+      return { name: n, row, matchText, score };
     })
     .filter(e => e.score >= 0)
     .sort((a, b) => b.score - a.score)
@@ -989,18 +1046,23 @@ function renderDropdown(){
     return;
   }
 
+  const showSub = searchCol !== 'NOMBRE';
+
   scored.forEach(entry => {
     const done = dayLog.some(l => l.nombre === entry.name);
     const div  = document.createElement('div');
     div.className = 'dd-item';
     div.setAttribute('role','option');
     div.innerHTML =
-      '<span class="dd-name">' + highlight(entry.name, raw) + '</span>' +
+      '<span class="dd-name">' +
+        highlight(entry.matchText, raw) +
+        (showSub ? ' <span class="dd-sub">— ' + entry.name + '</span>' : '') +
+      '</span>' +
       '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
         (done ? '✓ Listo' : 'Pendiente') +
       '</span>';
     div.addEventListener('click', () => {
-      searchInput.value = entry.name;
+      searchInput.value = entry.matchText;
       clearBtn.classList.add('show');
       dropdown.classList.remove('open');
       loadDevice(entry.name);

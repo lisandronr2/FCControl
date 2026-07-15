@@ -9,7 +9,7 @@
  *
  * Endpoints GET:
  *   ?action=schema          → encabezados + índices de NOMBRE y SERIAL
- *   ?action=list            → todos los valores de la columna NOMBRE
+ *   ?action=list            → NOMBRE (+ CT y UBICACION si existen) de cada fila
  *   ?action=get&nombre=XXX  → fila completa del dispositivo XXX
  *
  * Endpoint POST (JSON body):
@@ -37,14 +37,16 @@ function getSheet() {
 
 function getSchema(sheet) {
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  let nombreCol = -1, serialCol = -1, estadoCol = -1;
+  let nombreCol = -1, serialCol = -1, estadoCol = -1, ctCol = -1, ubicacionCol = -1;
   headers.forEach((h, i) => {
     const upper = String(h).toUpperCase().trim();
     if (upper.includes('NOMBRE') && nombreCol === -1) nombreCol = i;
     if (upper.includes('SERIAL') && serialCol === -1) serialCol = i;
     if ((upper.includes('ESTADO') || upper === 'STATUS') && estadoCol === -1) estadoCol = i;
+    if (/\bCT\b/.test(upper) && ctCol === -1) ctCol = i;
+    if ((upper.includes('UBICACION') || upper.includes('UBICACIÓN') || upper === 'LOCATION') && ubicacionCol === -1) ubicacionCol = i;
   });
-  return { headers, nombreCol, serialCol, estadoCol };
+  return { headers, nombreCol, serialCol, estadoCol, ctCol, ubicacionCol };
 }
 
 // Lee las opciones válidas de la columna ESTADO: primero intenta tomar la
@@ -112,15 +114,21 @@ function handleSchema() {
 
 function handleList() {
   const sheet = getSheet();
-  const { nombreCol } = getSchema(sheet);
+  const { nombreCol, ctCol, ubicacionCol } = getSchema(sheet);
   if (nombreCol === -1) return { error: 'No se encontró columna NOMBRE.' };
 
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return { names: [] };
 
-  const values = sheet.getRange(2, nombreCol + 1, lastRow - 1, 1).getValues();
+  const lastCol = sheet.getLastColumn();
+  const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
   const names = values
-    .map((r, i) => ({ name: String(r[0]).trim(), row: i + 2 }))
+    .map((r, i) => ({
+      name:      String(r[nombreCol]).trim(),
+      ct:        ctCol       !== -1 ? String(r[ctCol]).trim()        : '',
+      ubicacion: ubicacionCol !== -1 ? String(r[ubicacionCol]).trim() : '',
+      row: i + 2
+    }))
     .filter(e => e.name);
   return { names };
 }
