@@ -172,6 +172,61 @@ html, body {
 }
 .dd-sub  { font-weight: 400; color: var(--gray); font-size: 12px; }
 .dd-col1 { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--blue3); }
+
+/* ══ Panel de resultados inline ══════════════════════════════ */
+.results-panel { display: none; margin-top: 10px; }
+.results-panel.open { display: block; }
+
+.results-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 2px 10px;
+}
+.results-count {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--gray);
+}
+.print-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 14px; border-radius: 6px;
+  background: var(--ink); color: var(--paper);
+  font-family: 'Barlow Condensed', sans-serif; font-size: 13px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  border: none; cursor: pointer; transition: background .12s;
+}
+.print-btn:hover { background: var(--blue); }
+
+.results-list {
+  border: 1.5px solid var(--ink); border-radius: 10px;
+  overflow: hidden; background: var(--white);
+}
+.results-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; gap: 8px;
+  border-bottom: .5px solid var(--line);
+  cursor: pointer; transition: background .1s;
+}
+.results-item:last-child { border-bottom: none; }
+.results-item:hover, .results-item.focused { background: var(--paper2); }
+.ri-main { font-size: 14px; font-weight: 500; flex: 1; min-width: 0; }
+.ri-main mark { background: #FFD166; color: var(--ink); border-radius: 2px; padding: 0 1px; }
+
+/* ══ Print ═══════════════════════════════════════════════════ */
+.print-title { display: none; }
+@media print {
+  .topbar, .tab-bar, .filter-bar, .searchby-row,
+  .search-wrap, #emptyState, #devCard,
+  .print-btn, .offline-bar, .update-banner, .pending-pill { display: none !important; }
+  .frame { max-width: 100%; }
+  .view { padding: 0; overflow: visible; }
+  .print-title { display: block; font-size: 15px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px;
+    padding-bottom: 6px; border-bottom: 1.5px solid #333; color: #111; }
+  .results-panel { display: block !important; }
+  .results-list { border: none; border-top: 1px solid #ccc; border-radius: 0; }
+  .results-item { border-bottom: 1px solid #eee; cursor: default; break-inside: avoid; }
+  .results-item:hover { background: none; }
+  .dd-badge { border: 1px solid currentColor; }
+}
 .dd-badge {
   font-size: 10px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .04em; padding: 2px 7px; border-radius: 10px;
@@ -762,6 +817,16 @@ html, body {
       <div id="dropdown" class="dropdown" role="listbox"></div>
     </div>
 
+    <!-- Panel de resultados inline -->
+    <div id="resultsPanel" class="results-panel">
+      <div class="results-header">
+        <span id="resultsCount" class="results-count"></span>
+        <button class="print-btn" id="printBtn">🖨 Imprimir</button>
+      </div>
+      <div id="printTitle" class="print-title"></div>
+      <div class="results-list" id="resultsList"></div>
+    </div>
+
     <!-- Estado vacío -->
     <div id="emptyState" class="empty-state">
       <div class="empty-icon">📷</div>
@@ -992,14 +1057,32 @@ document.querySelectorAll('.searchby-chip').forEach(btn => {
     clearBtn.classList.remove('show');
     dropdown.classList.remove('open');
     dropdown.innerHTML = '';
+    hideResultsPanel();
+    $('emptyState').style.display = '';
     searchInput.focus();
   });
 });
 
-/* ════ Dropdown ═══════════════════════════════════════════════ */
-const searchInput = $('searchInput');
-const dropdown    = $('dropdown');
-const clearBtn    = $('clearBtn');
+/* ════ Búsqueda / Panel de resultados ════════════════════════ */
+const searchInput  = $('searchInput');
+const dropdown     = $('dropdown');   // sólo NOMBRE (fuzzy clásico)
+const clearBtn     = $('clearBtn');
+const resultsPanel = $('resultsPanel');
+const resultsList  = $('resultsList');
+
+function showResultsPanel(countText, printTitle){
+  $('resultsCount').textContent = countText;
+  $('printTitle').textContent   = printTitle;
+  $('emptyState').style.display = 'none';
+  $('devCard').classList.remove('visible');
+  resultsPanel.classList.add('open');
+}
+function hideResultsPanel(){
+  resultsPanel.classList.remove('open');
+  resultsList.innerHTML = '';
+}
+
+$('printBtn').addEventListener('click', () => window.print());
 
 let debounceTimer;
 searchInput.addEventListener('input', () => {
@@ -1014,31 +1097,44 @@ clearBtn.addEventListener('click', () => {
   clearBtn.classList.remove('show');
   dropdown.classList.remove('open');
   dropdown.innerHTML = '';
+  hideResultsPanel();
+  $('emptyState').style.display = '';
   searchInput.focus();
 });
 
 document.addEventListener('click', e => {
   if (!dropdown.contains(e.target) && e.target !== searchInput)
     dropdown.classList.remove('open');
+  // El resultsPanel no se cierra al hacer click fuera — es una lista permanente
 });
 
 function renderDropdown(){
   const raw = searchInput.value.trim();
   const q   = raw.toLowerCase();
+
+  // Siempre limpiar dropdown clásico
+  dropdown.classList.remove('open');
   dropdown.innerHTML = '';
 
-  if (!q){ dropdown.classList.remove('open'); return; }
+  if (!q){
+    hideResultsPanel();
+    $('emptyState').style.display = '';
+    return;
+  }
 
   if (!names.length){
-    dropdown.innerHTML = '<div class="dd-empty">Cargando lista de dispositivos…</div>';
-    dropdown.classList.add('open');
+    resultsList.innerHTML = '<div class="dd-empty">Cargando lista de dispositivos…</div>';
+    showResultsPanel('', '');
     return;
   }
 
   const pool = activeFilter === 'ALL' ? names
     : names.filter(e => getDeviceType(typeof e === 'string' ? e : e.name) === activeFilter);
 
-  /* ── Modo CT / UBICACION: lista completa con columnas cruzadas ── */
+  resultsList.innerHTML = '';
+
+  /* ── Modo CT: coteja CT, muestra UBICACION + NOMBRE ── */
+  /* ── Modo UBICACION: coteja UBICACION, muestra CT + NOMBRE ── */
   if (searchCol === 'CT' || searchCol === 'UBICACION') {
     const matched = pool
       .map(entry => {
@@ -1053,20 +1149,18 @@ function renderDropdown(){
       .sort((a, b) => b.score - a.score);
 
     if (!matched.length){
-      dropdown.innerHTML = '<div class="dd-empty">Sin coincidencias para "' + raw + '"</div>';
-      dropdown.classList.add('open');
+      resultsList.innerHTML = '<div class="dd-empty">Sin coincidencias para "' + raw + '"</div>';
+      showResultsPanel('', '');
       return;
     }
 
     matched.forEach(entry => {
-      const done   = dayLog.some(l => l.nombre === entry.name);
-      const div    = document.createElement('div');
-      div.className = 'dd-item';
-      div.setAttribute('role','option');
-      /* CT → mostrar UBICACION · NOMBRE  |  UBICACION → mostrar CT · NOMBRE */
+      const done = dayLog.some(l => l.nombre === entry.name);
+      const div  = document.createElement('div');
+      div.className = 'results-item';
       const col1 = searchCol === 'CT' ? entry.ubicacion : entry.ct;
       div.innerHTML =
-        '<span class="dd-name">' +
+        '<span class="ri-main">' +
           '<span class="dd-col1">' + (col1 || '—') + '</span>' +
           ' <span class="dd-sub">— ' + entry.name + '</span>' +
         '</span>' +
@@ -1074,67 +1168,60 @@ function renderDropdown(){
           (done ? '✓ Listo' : 'Pendiente') +
         '</span>';
       div.addEventListener('click', () => {
-        searchInput.value = entry.matchText;
-        clearBtn.classList.add('show');
-        dropdown.classList.remove('open');
+        hideResultsPanel();
         loadDevice(entry.name);
       });
-      dropdown.appendChild(div);
+      resultsList.appendChild(div);
     });
 
-    const count = document.createElement('div');
-    count.className = 'dd-count';
-    count.textContent = matched.length + ' dispositivo' + (matched.length !== 1 ? 's' : '');
-    dropdown.appendChild(count);
-    dropdown.classList.add('open');
+    const n   = matched.length;
+    const col = searchCol === 'CT' ? 'CT' : 'Ubicación';
+    showResultsPanel(
+      n + ' dispositivo' + (n !== 1 ? 's' : ''),
+      col + ': ' + raw.toUpperCase()
+    );
     return;
   }
 
-  /* ── Modo NOMBRE: comportamiento original ── */
+  /* ── Modo NOMBRE: fuzzy, muestra resultados en panel inline ── */
   const scored = pool
     .map(entry => {
       const n         = typeof entry === 'string' ? entry : entry.name;
-      const row       = typeof entry === 'object' ? entry.row : null;
-      const matchText = fieldForSearch(entry);
+      const matchText = typeof entry === 'string' ? entry : (entry.name || '');
       const score     = matchText ? fuzzyScore(matchText, q) : -1;
-      return { name: n, row, matchText, score };
+      return { name: n, matchText, score };
     })
     .filter(e => e.score >= 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 15);
+    .slice(0, 20);
 
   if (!scored.length){
-    dropdown.innerHTML = '<div class="dd-empty">Sin coincidencias para "' + raw + '"</div>';
-    dropdown.classList.add('open');
+    resultsList.innerHTML = '<div class="dd-empty">Sin coincidencias para "' + raw + '"</div>';
+    showResultsPanel('', '');
     return;
   }
 
   scored.forEach(entry => {
     const done = dayLog.some(l => l.nombre === entry.name);
     const div  = document.createElement('div');
-    div.className = 'dd-item';
-    div.setAttribute('role','option');
+    div.className = 'results-item';
     div.innerHTML =
-      '<span class="dd-name">' +
-        highlight(entry.matchText, raw) +
-      '</span>' +
+      '<span class="ri-main">' + highlight(entry.matchText, raw) + '</span>' +
       '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
         (done ? '✓ Listo' : 'Pendiente') +
       '</span>';
     div.addEventListener('click', () => {
-      searchInput.value = entry.matchText;
-      clearBtn.classList.add('show');
-      dropdown.classList.remove('open');
+      hideResultsPanel();
       loadDevice(entry.name);
     });
-    dropdown.appendChild(div);
+    resultsList.appendChild(div);
   });
 
-  const count = document.createElement('div');
-  count.className = 'dd-count';
-  count.textContent = scored.length + ' resultado' + (scored.length !== 1 ? 's' : '');
-  dropdown.appendChild(count);
-  dropdown.classList.add('open');
+  const n = scored.length;
+  showResultsPanel(
+    n + ' resultado' + (n !== 1 ? 's' : ''),
+    'Nombre: ' + raw
+  );
 }
 
 /* Navegar con teclado */
@@ -1296,6 +1383,7 @@ function renderCard(nombre, record, headers, estadoOptions){
   $('cardFecha').textContent = fechaVal || 'Sin registro';
 
   // Mostrar ficha
+  hideResultsPanel();
   $('emptyState').style.display = 'none';
   $('devCard').classList.add('visible');
   if (!hasSN) setTimeout(() => snInput.focus(), 120);
