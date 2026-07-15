@@ -170,7 +170,8 @@ html, body {
   background: #FFD166; color: var(--ink);
   border-radius: 2px; padding: 0 1px;
 }
-.dd-sub { font-weight: 400; color: var(--gray); font-size: 12px; }
+.dd-sub  { font-weight: 400; color: var(--gray); font-size: 12px; }
+.dd-col1 { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--blue3); }
 .dd-badge {
   font-size: 10px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .04em; padding: 2px 7px; border-radius: 10px;
@@ -965,10 +966,19 @@ function fieldForSearch(entry){
 }
 
 function updateSearchLabels(){
-  const lbl = SEARCH_COL_LABELS[searchCol];
-  $('searchLbl').textContent  = (searchCol === 'NOMBRE' ? 'Nombre' : lbl.toUpperCase()) + ' del dispositivo';
-  $('searchInput').placeholder = 'Escribe ' + lbl + ' para buscar…';
-  $('emptyTxt').textContent   = 'Escribe ' + lbl + ' (o parte) para buscar un dispositivo.';
+  if (searchCol === 'CT'){
+    $('searchLbl').textContent   = 'CT — muestra Ubicación y Nombre';
+    $('searchInput').placeholder = 'Escribe CT para buscar…';
+    $('emptyTxt').textContent    = 'Escribe un CT (ej: CT01) para ver todos sus dispositivos.';
+  } else if (searchCol === 'UBICACION'){
+    $('searchLbl').textContent   = 'Ubicación — muestra CT y Nombre';
+    $('searchInput').placeholder = 'Escribe ubicación para buscar…';
+    $('emptyTxt').textContent    = 'Escribe una ubicación (ej: BTV01) para ver todos sus dispositivos.';
+  } else {
+    $('searchLbl').textContent   = 'Nombre del dispositivo';
+    $('searchInput').placeholder = 'Escribe nombre para buscar…';
+    $('emptyTxt').textContent    = 'Escribe nombre (o parte) para buscar un dispositivo.';
+  }
 }
 
 document.querySelectorAll('.searchby-chip').forEach(btn => {
@@ -1028,6 +1038,59 @@ function renderDropdown(){
   const pool = activeFilter === 'ALL' ? names
     : names.filter(e => getDeviceType(typeof e === 'string' ? e : e.name) === activeFilter);
 
+  /* ── Modo CT / UBICACION: lista completa con columnas cruzadas ── */
+  if (searchCol === 'CT' || searchCol === 'UBICACION') {
+    const matched = pool
+      .map(entry => {
+        const n         = typeof entry === 'string' ? entry : entry.name;
+        const ct        = typeof entry === 'object' ? (entry.ct        || '') : '';
+        const ubicacion = typeof entry === 'object' ? (entry.ubicacion || '') : '';
+        const matchText = searchCol === 'CT' ? ct : ubicacion;
+        const score     = matchText ? fuzzyScore(matchText, q) : -1;
+        return { name: n, ct, ubicacion, matchText, score };
+      })
+      .filter(e => e.score >= 0)
+      .sort((a, b) => b.score - a.score);
+
+    if (!matched.length){
+      dropdown.innerHTML = '<div class="dd-empty">Sin coincidencias para "' + raw + '"</div>';
+      dropdown.classList.add('open');
+      return;
+    }
+
+    matched.forEach(entry => {
+      const done   = dayLog.some(l => l.nombre === entry.name);
+      const div    = document.createElement('div');
+      div.className = 'dd-item';
+      div.setAttribute('role','option');
+      /* CT → mostrar UBICACION · NOMBRE  |  UBICACION → mostrar CT · NOMBRE */
+      const col1 = searchCol === 'CT' ? entry.ubicacion : entry.ct;
+      div.innerHTML =
+        '<span class="dd-name">' +
+          '<span class="dd-col1">' + (col1 || '—') + '</span>' +
+          ' <span class="dd-sub">— ' + entry.name + '</span>' +
+        '</span>' +
+        '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
+          (done ? '✓ Listo' : 'Pendiente') +
+        '</span>';
+      div.addEventListener('click', () => {
+        searchInput.value = entry.matchText;
+        clearBtn.classList.add('show');
+        dropdown.classList.remove('open');
+        loadDevice(entry.name);
+      });
+      dropdown.appendChild(div);
+    });
+
+    const count = document.createElement('div');
+    count.className = 'dd-count';
+    count.textContent = matched.length + ' dispositivo' + (matched.length !== 1 ? 's' : '');
+    dropdown.appendChild(count);
+    dropdown.classList.add('open');
+    return;
+  }
+
+  /* ── Modo NOMBRE: comportamiento original ── */
   const scored = pool
     .map(entry => {
       const n         = typeof entry === 'string' ? entry : entry.name;
@@ -1046,8 +1109,6 @@ function renderDropdown(){
     return;
   }
 
-  const showSub = searchCol !== 'NOMBRE';
-
   scored.forEach(entry => {
     const done = dayLog.some(l => l.nombre === entry.name);
     const div  = document.createElement('div');
@@ -1056,7 +1117,6 @@ function renderDropdown(){
     div.innerHTML =
       '<span class="dd-name">' +
         highlight(entry.matchText, raw) +
-        (showSub ? ' <span class="dd-sub">— ' + entry.name + '</span>' : '') +
       '</span>' +
       '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
         (done ? '✓ Listo' : 'Pendiente') +
@@ -1070,12 +1130,10 @@ function renderDropdown(){
     dropdown.appendChild(div);
   });
 
-  // Contador
   const count = document.createElement('div');
   count.className = 'dd-count';
   count.textContent = scored.length + ' resultado' + (scored.length !== 1 ? 's' : '');
   dropdown.appendChild(count);
-
   dropdown.classList.add('open');
 }
 
@@ -1368,7 +1426,7 @@ $('saveBtn').addEventListener('click', async () => {
     const res  = await fetch(apiUrl, {
       method:  'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body:    JSON.stringify({ nombre, serial, mac: ($('camMacInput').value || '').trim().toUpperCase().replace(/-/g, ':') || undefined, tecnico, estado, rowIndex: current.rowIndex })
+      body:    JSON.stringify({ nombre, serial, tecnico, estado, rowIndex: current.rowIndex })
     });
     const data = await res.json();
 
@@ -1395,7 +1453,7 @@ $('saveBtn').addEventListener('click', async () => {
       showToast(data.error || 'No se pudo guardar.', 'err');
     }
   } catch(e){
-    addToPendingQueue({ nombre, serial, mac: ($('camMacInput').value || '').trim().toUpperCase().replace(/-/g, ':') || undefined, tecnico, estado, rowIndex: current.rowIndex });
+    addToPendingQueue({ nombre, serial, tecnico, estado, rowIndex: current.rowIndex });
     showToast('Sin red — guardado en cola local 📥', '');
   } finally {
     btn.classList.remove('saving');
@@ -1709,7 +1767,6 @@ function renderTypeBreakdown() {
 }
 
 /* ════ Service Worker (PWA) ═══════════════════════════════════ */
-/* build: 2026-07-14T05:02:02Z */
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
     try {
