@@ -207,8 +207,21 @@ html, body {
 }
 .results-item:last-child { border-bottom: none; }
 .results-item:hover, .results-item.focused { background: var(--paper2); }
+.results-item--child { padding-left: 24px; }
 .ri-main { font-size: 14px; font-weight: 500; flex: 1; min-width: 0; }
 .ri-main mark { background: #FFD166; color: var(--ink); border-radius: 2px; padding: 0 1px; }
+
+.results-group-hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 14px 5px;
+  background: var(--blue); color: #fff;
+  font-family: var(--mono); font-size: 12.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .05em;
+  border-bottom: .5px solid rgba(255,255,255,.15);
+}
+.results-group-hdr-count {
+  font-size: 10px; font-weight: 600; opacity: .65; letter-spacing: .04em;
+}
 
 /* ══ Print ═══════════════════════════════════════════════════ */
 .print-title { display: none; }
@@ -224,7 +237,9 @@ html, body {
   .results-panel { display: block !important; }
   .results-list { border: none; border-top: 1px solid #ccc; border-radius: 0; }
   .results-item { border-bottom: 1px solid #eee; cursor: default; break-inside: avoid; }
+  .results-item--child { padding-left: 24px; }
   .results-item:hover { background: none; }
+  .results-group-hdr { background: #eee; color: #111; break-after: avoid; }
   .dd-badge { border: 1px solid currentColor; }
 }
 .dd-badge {
@@ -1154,30 +1169,48 @@ function renderDropdown(){
       return;
     }
 
+    // Group by the cross-column: CT search → group by UBICACION; UBICACION search → group by CT
+    const groups = new Map();
     matched.forEach(entry => {
-      const done = dayLog.some(l => l.nombre === entry.name);
-      const div  = document.createElement('div');
-      div.className = 'results-item';
-      const col1 = searchCol === 'CT' ? entry.ubicacion : entry.ct;
-      div.innerHTML =
-        '<span class="ri-main">' +
-          '<span class="dd-col1">' + (col1 || '—') + '</span>' +
-          ' <span class="dd-sub">— ' + entry.name + '</span>' +
-        '</span>' +
-        '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
-          (done ? '✓ Listo' : 'Pendiente') +
+      const key = (searchCol === 'CT' ? entry.ubicacion : entry.ct) || '—';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(entry);
+    });
+    const sortedKeys = [...groups.keys()].sort((a, b) => a.localeCompare(b));
+
+    sortedKeys.forEach(key => {
+      const items = groups.get(key);
+
+      const hdr = document.createElement('div');
+      hdr.className = 'results-group-hdr';
+      hdr.innerHTML =
+        '<span>' + key + '</span>' +
+        '<span class="results-group-hdr-count">' +
+          items.length + ' dispositivo' + (items.length !== 1 ? 's' : '') +
         '</span>';
-      div.addEventListener('click', () => {
-        hideResultsPanel();
-        loadDevice(entry.name);
+      resultsList.appendChild(hdr);
+
+      items.forEach(entry => {
+        const done = dayLog.some(l => l.nombre === entry.name);
+        const div  = document.createElement('div');
+        div.className = 'results-item results-item--child';
+        div.innerHTML =
+          '<span class="ri-main">' + entry.name + '</span>' +
+          '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
+            (done ? '✓ Listo' : 'Pendiente') +
+          '</span>';
+        div.addEventListener('click', () => {
+          hideResultsPanel();
+          loadDevice(entry.name);
+        });
+        resultsList.appendChild(div);
       });
-      resultsList.appendChild(div);
     });
 
     const n   = matched.length;
     const col = searchCol === 'CT' ? 'CT' : 'Ubicación';
     showResultsPanel(
-      n + ' dispositivo' + (n !== 1 ? 's' : ''),
+      n + ' dispositivo' + (n !== 1 ? 's' : '') + ' en ' + groups.size + ' grupo' + (groups.size !== 1 ? 's' : ''),
       col + ': ' + raw.toUpperCase()
     );
     return;
