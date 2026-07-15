@@ -1577,6 +1577,8 @@ $('saveBtn').addEventListener('click', async () => {
   const tecnico = $('fTech').value.trim();
   const estadoVisible = $('estadoField').style.display !== 'none';
   const estado = estadoVisible ? $('fEstado').value : '';
+  // Incluir MAC si fue ingresada en el modal de configuración
+  const mac = current.macHeader ? $('camMacInput').value.trim() : '';
 
   // Estado visual "guardando"
   const btn = $('saveBtn');
@@ -1584,11 +1586,14 @@ $('saveBtn').addEventListener('click', async () => {
   btn.disabled = true;
   $('saveTxt').textContent = 'Guardando…';
 
+  const payload = { nombre, serial, tecnico, estado, rowIndex: current.rowIndex };
+  if (mac) payload.mac = mac;
+
   try {
     const res  = await fetch(apiUrl, {
       method:  'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body:    JSON.stringify({ nombre, serial, tecnico, estado, rowIndex: current.rowIndex })
+      body:    JSON.stringify(payload)
     });
     const data = await res.json();
 
@@ -1603,6 +1608,7 @@ $('saveBtn').addEventListener('click', async () => {
       // Actualizar caché de current
       if (current.serialHeader) current.data[current.serialHeader] = serial;
       if (current.estadoHeader && data.estado) current.data[current.estadoHeader] = data.estado;
+      if (mac && current.macHeader) current.data[current.macHeader] = mac;
 
       // Log diario
       const t = new Date().toLocaleTimeString('es', {hour:'2-digit', minute:'2-digit'});
@@ -1615,7 +1621,9 @@ $('saveBtn').addEventListener('click', async () => {
       showToast(data.error || 'No se pudo guardar.', 'err');
     }
   } catch(e){
-    addToPendingQueue({ nombre, serial, tecnico, estado, rowIndex: current.rowIndex });
+    const queued = { nombre, serial, tecnico, estado, rowIndex: current.rowIndex };
+    if (mac) queued.mac = mac;
+    addToPendingQueue(queued);
     showToast('Sin red — guardado en cola local 📥', '');
   } finally {
     btn.classList.remove('saving');
