@@ -223,6 +223,47 @@ html, body {
   font-size: 10px; font-weight: 600; opacity: .65; letter-spacing: .04em;
 }
 
+/* ══ Tablet 7-8" portrait / 10" (≥ 600 px) ══════════════════ */
+@media (min-width: 600px) {
+  .frame    { max-width: 680px; }
+
+  .topbar   { padding: 18px 28px 16px; }
+  .brand-name { font-size: 34px; }
+
+  .tab-btn  { font-size: 15px; padding: 13px 8px; }
+
+  .view     { padding: 22px 28px 110px; }
+
+  .filter-bar   { padding: 10px 28px 8px; }
+  .filter-chip  { font-size: 14px; padding: 7px 16px; }
+
+  .searchby-chip { font-size: 14px; padding: 6px 14px; }
+  .searchby-lbl  { font-size: 12px; }
+
+  .search-box       { padding: 13px 18px; border-radius: 12px; }
+  .search-box input { font-size: 18px; }
+
+  .results-item         { padding: 13px 20px; }
+  .results-item--child  { padding-left: 30px; }
+  .results-group-hdr    { padding: 9px 20px 7px; font-size: 13.5px; }
+
+  .dev-card   { padding: 20px 20px 18px; }
+  .data-grid  { grid-template-columns: 1fr 1fr 1fr; }
+  .perf       { margin-left: -20px; margin-right: -20px; }
+
+  .camcfg-card { max-width: 600px; border-radius: 18px 18px 0 0; }
+}
+
+/* ══ Tablet 10" landscape / pantallas anchas (≥ 900 px) ══════ */
+@media (min-width: 900px) {
+  .frame      { max-width: 860px; }
+  .topbar     { padding: 22px 36px 18px; }
+  .brand-name { font-size: 40px; }
+  .view       { padding: 28px 36px 120px; }
+  .filter-bar { padding: 10px 36px 8px; }
+  .camcfg-card { max-width: 740px; }
+}
+
 /* ══ Print ═══════════════════════════════════════════════════ */
 .print-title { display: none; }
 @media print {
