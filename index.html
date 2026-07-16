@@ -123,6 +123,21 @@ html, body {
 }
 .searchby-chip.active { background: var(--ink); color: var(--paper); }
 
+/* ══ Selectores de búsqueda ══════════════════════════════════ */
+.search-sel-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.search-sel {
+  flex: 1; min-width: 0;
+  border: 1.5px solid var(--ink); border-radius: 10px;
+  padding: 11px 12px; background: var(--white); color: var(--ink);
+  font-family: 'Barlow Condensed', sans-serif; font-size: 16px;
+  font-weight: 600; letter-spacing: .03em;
+  cursor: pointer; outline: none; -webkit-appearance: none; appearance: none;
+}
+.search-sel:focus { border-color: var(--blue3); }
+.search-sel.mode { flex: 0 0 auto; min-width: 120px; text-transform: uppercase; }
+.search-sel:disabled { opacity: .45; cursor: default; }
+.ri-sub { font-size: 11px; color: var(--gray); white-space: nowrap; }
+
 /* ══ Buscador con desplegable ════════════════════════════════ */
 .search-wrap { position: relative; margin-bottom: 4px; }
 
@@ -267,7 +282,7 @@ html, body {
 /* ══ Print ═══════════════════════════════════════════════════ */
 .print-title { display: none; }
 @media print {
-  .topbar, .tab-bar, .filter-bar, .searchby-row,
+  .topbar, .tab-bar, .filter-bar, .searchby-row, .search-sel-row,
   .search-wrap, #emptyState, #devCard,
   .print-btn, .offline-bar, .update-banner, .pending-pill { display: none !important; }
   .frame { max-width: 100%; }
@@ -854,24 +869,20 @@ html, body {
   <!-- ══ Vista: Búsqueda ══ -->
   <div id="view-search" class="view">
 
-    <div class="searchby-row" id="searchByRow">
-      <span class="searchby-lbl">Buscar por:</span>
-      <button type="button" class="searchby-chip active" data-col="NOMBRE">Nombre</button>
-      <button type="button" class="searchby-chip" data-col="CT">CT</button>
-      <button type="button" class="searchby-chip" data-col="UBICACION">Ubicación</button>
+    <div class="search-sel-row">
+      <select id="searchModeSelect" class="search-sel mode">
+        <option value="NOMBRE">Nombre</option>
+        <option value="CT">CT</option>
+        <option value="UBICACION">Ubicación</option>
+      </select>
+      <select id="searchValueSelect" class="search-sel value" disabled>
+        <option value="">— Cargando… —</option>
+      </select>
     </div>
-
-    <label class="lbl" for="searchInput" id="searchLbl">Nombre del dispositivo</label>
-    <div class="search-wrap">
-      <div class="search-box">
-        <span class="search-icon">🔍</span>
-        <input id="searchInput" type="text"
-          placeholder="Escribe para buscar…"
-          autocomplete="off" autocorrect="off" spellcheck="false">
-        <button class="clear-btn" id="clearBtn" title="Limpiar">✕</button>
-      </div>
-      <div id="dropdown" class="dropdown" role="listbox"></div>
-    </div>
+    <!-- Stubs para referencias JS heredadas (ocultos) -->
+    <div id="dropdown" style="display:none"></div>
+    <input id="searchInput" style="display:none">
+    <button id="clearBtn" style="display:none"></button>
 
     <!-- Panel de resultados inline -->
     <div id="resultsPanel" class="results-panel">
@@ -1006,6 +1017,8 @@ let current = null;  // {data: {}, rowIndex: number, headers:[]}
 let totalDevices = parseInt(localStorage.getItem(KEYS.total) || '0', 10);
 
 try { names   = JSON.parse(localStorage.getItem(KEYS.names)  || '[]'); } catch(e){}
+// Poblar select con caché antes de que llegue la respuesta del servidor
+if (names.length) setTimeout(populateValueSelect, 0);
 
 /* ── Limpiar log si es un día nuevo ── */
 (function initLog(){
@@ -1048,6 +1061,7 @@ async function loadNames(){
     totalDevices = names.length;
     localStorage.setItem(KEYS.total, String(totalDevices));
     buildFilterChips();
+    populateValueSelect();
   } catch(e){
     // Usa caché local si no hay red
     showToast('Sin conexión — usando lista local', '');
@@ -1075,54 +1089,14 @@ function highlight(text, q){
   return text.replace(re, '<mark>$1</mark>');
 }
 
-/* ════ Selector de columna de búsqueda ═════════════════════════ */
-let searchCol = 'NOMBRE'; // 'NOMBRE' | 'CT' | 'UBICACION'
-const SEARCH_COL_LABELS = { NOMBRE: 'nombre', CT: 'CT', UBICACION: 'ubicación' };
+/* ════ Búsqueda por desplegable ══════════════════════════════ */
+let searchCol = 'NOMBRE';
 
-function fieldForSearch(entry){
-  if (typeof entry === 'string') return entry;
-  if (searchCol === 'CT')        return entry.ct        || '';
-  if (searchCol === 'UBICACION') return entry.ubicacion  || '';
-  return entry.name || '';
-}
-
-function updateSearchLabels(){
-  if (searchCol === 'CT'){
-    $('searchLbl').textContent   = 'CT — muestra Ubicación y Nombre';
-    $('searchInput').placeholder = 'Escribe CT para buscar…';
-    $('emptyTxt').textContent    = 'Escribe un CT (ej: CT01) para ver todos sus dispositivos.';
-  } else if (searchCol === 'UBICACION'){
-    $('searchLbl').textContent   = 'Ubicación — muestra CT y Nombre';
-    $('searchInput').placeholder = 'Escribe ubicación para buscar…';
-    $('emptyTxt').textContent    = 'Escribe una ubicación (ej: BTV01) para ver todos sus dispositivos.';
-  } else {
-    $('searchLbl').textContent   = 'Nombre del dispositivo';
-    $('searchInput').placeholder = 'Escribe nombre para buscar…';
-    $('emptyTxt').textContent    = 'Escribe nombre (o parte) para buscar un dispositivo.';
-  }
-}
-
-document.querySelectorAll('.searchby-chip').forEach(btn => {
-  btn.addEventListener('click', () => {
-    if (btn.dataset.col === searchCol) return;
-    document.querySelectorAll('.searchby-chip').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    searchCol = btn.dataset.col;
-    updateSearchLabels();
-    searchInput.value = '';
-    clearBtn.classList.remove('show');
-    dropdown.classList.remove('open');
-    dropdown.innerHTML = '';
-    hideResultsPanel();
-    $('emptyState').style.display = '';
-    searchInput.focus();
-  });
-});
-
-/* ════ Búsqueda / Panel de resultados ════════════════════════ */
+// Stubs — elementos ocultos preservados para compatibilidad con refs heredadas
 const searchInput  = $('searchInput');
-const dropdown     = $('dropdown');   // sólo NOMBRE (fuzzy clásico)
+const dropdown     = $('dropdown');
 const clearBtn     = $('clearBtn');
+
 const resultsPanel = $('resultsPanel');
 const resultsList  = $('resultsList');
 
@@ -1140,191 +1114,151 @@ function hideResultsPanel(){
 
 $('printBtn').addEventListener('click', () => window.print());
 
-let debounceTimer;
-searchInput.addEventListener('input', () => {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(renderDropdown, 90);
-  clearBtn.classList.toggle('show', searchInput.value.length > 0);
-});
-searchInput.addEventListener('focus', renderDropdown);
+/* ── Obtiene MODELO del caché offline ── */
+function getModelo(nombre){
+  const cached = getDeviceFromCache(nombre);
+  if (!cached || !cached.result) return '';
+  const result = cached.result;
+  const key = Object.keys(result).find(k => {
+    const u = k.toUpperCase().trim();
+    return u === 'MODELO' || u === 'MODEL';
+  });
+  return key ? (result[key] || '') : '';
+}
 
-clearBtn.addEventListener('click', () => {
-  searchInput.value = '';
-  clearBtn.classList.remove('show');
-  dropdown.classList.remove('open');
-  dropdown.innerHTML = '';
-  hideResultsPanel();
-  $('emptyState').style.display = '';
-  searchInput.focus();
-});
-
-document.addEventListener('click', e => {
-  if (!dropdown.contains(e.target) && e.target !== searchInput)
-    dropdown.classList.remove('open');
-  // El resultsPanel no se cierra al hacer click fuera — es una lista permanente
-});
-
-function renderDropdown(){
-  const raw = searchInput.value.trim();
-  const q   = raw.toLowerCase();
-
-  // Siempre limpiar dropdown clásico
-  dropdown.classList.remove('open');
-  dropdown.innerHTML = '';
-
-  if (!q){
-    hideResultsPanel();
-    $('emptyState').style.display = '';
-    return;
-  }
+/* ── Poblar el select de valores según el modo ── */
+function populateValueSelect(){
+  const mode = $('searchModeSelect').value;
+  const sel  = $('searchValueSelect');
+  sel.innerHTML = '';
 
   if (!names.length){
-    resultsList.innerHTML = '<div class="dd-empty">Cargando lista de dispositivos…</div>';
+    sel.innerHTML = '<option value="">— Sin datos —</option>';
+    sel.disabled = true;
+    return;
+  }
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = mode === 'NOMBRE' ? '— Elige un nombre —'
+    : mode === 'CT' ? '— Elige un CT —'
+    : '— Elige una ubicación —';
+  sel.appendChild(placeholder);
+
+  if (mode === 'NOMBRE'){
+    const pool = activeFilter === 'ALL' ? names
+      : names.filter(e => getDeviceType(e.name) === activeFilter);
+    pool.slice().sort((a, b) => a.name.localeCompare(b.name, 'es')).forEach(e => {
+      const opt = document.createElement('option');
+      opt.value = e.name;
+      opt.textContent = e.name;
+      sel.appendChild(opt);
+    });
+  } else if (mode === 'CT'){
+    const cts = [...new Set(names.map(e => e.ct).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'es'));
+    cts.forEach(ct => {
+      const cnt = names.filter(e => e.ct === ct).length;
+      const opt = document.createElement('option');
+      opt.value = ct;
+      opt.textContent = ct + '  (' + cnt + ' disp.)';
+      sel.appendChild(opt);
+    });
+  } else {
+    const ubics = [...new Set(names.map(e => e.ubicacion).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'es'));
+    ubics.forEach(u => {
+      const cnt = names.filter(e => e.ubicacion === u).length;
+      const opt = document.createElement('option');
+      opt.value = u;
+      opt.textContent = u + '  (' + cnt + ' disp.)';
+      sel.appendChild(opt);
+    });
+  }
+  sel.disabled = false;
+}
+
+/* ── Ejecutar búsqueda al seleccionar un valor ── */
+function executeSelectSearch(mode, val){
+  hideResultsPanel();
+  $('devCard').classList.remove('visible');
+  $('emptyState').style.display = 'none';
+
+  if (mode === 'NOMBRE'){
+    loadDevice(val);
+    return;
+  }
+
+  const matched = names.filter(e =>
+    mode === 'CT' ? e.ct === val : e.ubicacion === val
+  );
+
+  if (!matched.length){
+    resultsList.innerHTML = '<div class="dd-empty">Sin dispositivos para este valor.</div>';
     showResultsPanel('', '');
     return;
   }
 
-  const pool = activeFilter === 'ALL' ? names
-    : names.filter(e => getDeviceType(typeof e === 'string' ? e : e.name) === activeFilter);
+  // Agrupar: CT → por UBICACION; UBICACION → por CT
+  const groups = new Map();
+  matched.forEach(entry => {
+    const key = (mode === 'CT' ? entry.ubicacion : entry.ct) || '—';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(entry);
+  });
+  const sortedKeys = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'es'));
 
   resultsList.innerHTML = '';
+  sortedKeys.forEach(key => {
+    const items = groups.get(key);
+    const hdr = document.createElement('div');
+    hdr.className = 'results-group-hdr';
+    hdr.innerHTML =
+      '<span>' + key + '</span>' +
+      '<span class="results-group-hdr-count">' + items.length + ' disp.</span>';
+    resultsList.appendChild(hdr);
 
-  /* ── Modo CT: coteja CT, muestra UBICACION + NOMBRE ── */
-  /* ── Modo UBICACION: coteja UBICACION, muestra CT + NOMBRE ── */
-  if (searchCol === 'CT' || searchCol === 'UBICACION') {
-    const matched = pool
-      .map(entry => {
-        const n         = typeof entry === 'string' ? entry : entry.name;
-        const ct        = typeof entry === 'object' ? (entry.ct        || '') : '';
-        const ubicacion = typeof entry === 'object' ? (entry.ubicacion || '') : '';
-        const matchText = searchCol === 'CT' ? ct : ubicacion;
-        const score     = matchText ? fuzzyScore(matchText, q) : -1;
-        return { name: n, ct, ubicacion, matchText, score };
-      })
-      .filter(e => e.score >= 0)
-      .sort((a, b) => b.score - a.score);
-
-    if (!matched.length){
-      resultsList.innerHTML = '<div class="dd-empty">Sin coincidencias para "' + raw + '"</div>';
-      showResultsPanel('', '');
-      return;
-    }
-
-    // Group by the cross-column: CT search → group by UBICACION; UBICACION search → group by CT
-    const groups = new Map();
-    matched.forEach(entry => {
-      const key = (searchCol === 'CT' ? entry.ubicacion : entry.ct) || '—';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(entry);
-    });
-    const sortedKeys = [...groups.keys()].sort((a, b) => a.localeCompare(b));
-
-    sortedKeys.forEach(key => {
-      const items = groups.get(key);
-
-      const hdr = document.createElement('div');
-      hdr.className = 'results-group-hdr';
-      hdr.innerHTML =
-        '<span>' + key + '</span>' +
-        '<span class="results-group-hdr-count">' +
-          items.length + ' dispositivo' + (items.length !== 1 ? 's' : '') +
+    items.sort((a, b) => a.name.localeCompare(b.name, 'es')).forEach(entry => {
+      const done   = dayLog.some(l => l.nombre === entry.name);
+      const modelo = getModelo(entry.name);
+      const div    = document.createElement('div');
+      div.className = 'results-item results-item--child';
+      div.innerHTML =
+        '<span class="ri-main">' + entry.name +
+          (modelo ? ' <span class="ri-sub">· ' + modelo + '</span>' : '') +
+        '</span>' +
+        '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
+          (done ? '✓ Listo' : 'Pendiente') +
         '</span>';
-      resultsList.appendChild(hdr);
-
-      items.forEach(entry => {
-        const done = dayLog.some(l => l.nombre === entry.name);
-        const div  = document.createElement('div');
-        div.className = 'results-item results-item--child';
-        div.innerHTML =
-          '<span class="ri-main">' + entry.name + '</span>' +
-          '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
-            (done ? '✓ Listo' : 'Pendiente') +
-          '</span>';
-        div.addEventListener('click', () => {
-          hideResultsPanel();
-          loadDevice(entry.name);
-        });
-        resultsList.appendChild(div);
+      div.addEventListener('click', () => {
+        hideResultsPanel();
+        loadDevice(entry.name);
       });
+      resultsList.appendChild(div);
     });
-
-    const n   = matched.length;
-    const col = searchCol === 'CT' ? 'CT' : 'Ubicación';
-    showResultsPanel(
-      n + ' dispositivo' + (n !== 1 ? 's' : '') + ' en ' + groups.size + ' grupo' + (groups.size !== 1 ? 's' : ''),
-      col + ': ' + raw.toUpperCase()
-    );
-    return;
-  }
-
-  /* ── Modo NOMBRE: fuzzy, muestra resultados en panel inline ── */
-  const scored = pool
-    .map(entry => {
-      const n         = typeof entry === 'string' ? entry : entry.name;
-      const matchText = typeof entry === 'string' ? entry : (entry.name || '');
-      const score     = matchText ? fuzzyScore(matchText, q) : -1;
-      return { name: n, matchText, score };
-    })
-    .filter(e => e.score >= 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 20);
-
-  if (!scored.length){
-    resultsList.innerHTML = '<div class="dd-empty">Sin coincidencias para "' + raw + '"</div>';
-    showResultsPanel('', '');
-    return;
-  }
-
-  scored.forEach(entry => {
-    const done = dayLog.some(l => l.nombre === entry.name);
-    const div  = document.createElement('div');
-    div.className = 'results-item';
-    div.innerHTML =
-      '<span class="ri-main">' + highlight(entry.matchText, raw) + '</span>' +
-      '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
-        (done ? '✓ Listo' : 'Pendiente') +
-      '</span>';
-    div.addEventListener('click', () => {
-      hideResultsPanel();
-      loadDevice(entry.name);
-    });
-    resultsList.appendChild(div);
   });
 
-  const n = scored.length;
+  const n   = matched.length;
+  const col = mode === 'CT' ? 'CT' : 'Ubicación';
   showResultsPanel(
-    n + ' resultado' + (n !== 1 ? 's' : ''),
-    'Nombre: ' + raw
+    n + ' dispositivo' + (n !== 1 ? 's' : '') + ' en ' + groups.size + ' grupo' + (groups.size !== 1 ? 's' : ''),
+    col + ': ' + val
   );
 }
 
-/* Navegar con teclado */
-searchInput.addEventListener('keydown', e => {
-  const items = [...dropdown.querySelectorAll('.dd-item')];
-  const cur   = items.findIndex(i => i.classList.contains('focused'));
+/* ── Listeners de los selects ── */
+$('searchModeSelect').addEventListener('change', () => {
+  searchCol = $('searchModeSelect').value;
+  hideResultsPanel();
+  $('devCard').classList.remove('visible');
+  $('emptyState').style.display = '';
+  populateValueSelect();
+});
 
-  if (e.key === 'ArrowDown'){
-    e.preventDefault();
-    items.forEach(i => i.classList.remove('focused'));
-    const next = items[cur + 1] || items[0];
-    if (next){ next.classList.add('focused'); next.scrollIntoView({block:'nearest'}); }
-  }
-  if (e.key === 'ArrowUp'){
-    e.preventDefault();
-    items.forEach(i => i.classList.remove('focused'));
-    const prev = items[cur - 1] || items[items.length - 1];
-    if (prev){ prev.classList.add('focused'); prev.scrollIntoView({block:'nearest'}); }
-  }
-  if (e.key === 'Enter'){
-    e.preventDefault();
-    const focused = dropdown.querySelector('.dd-item.focused');
-    if (focused){ focused.click(); return; }
-    const first = items[0];
-    if (first){ first.click(); }
-  }
-  if (e.key === 'Escape'){
-    dropdown.classList.remove('open');
-  }
+$('searchValueSelect').addEventListener('change', () => {
+  const val = $('searchValueSelect').value;
+  if (!val) return;
+  executeSelectSearch($('searchModeSelect').value, val);
 });
 
 /* ════ Cargar dispositivo desde el Sheet ═════════════════════ */
@@ -1795,7 +1729,7 @@ function buildFilterChips() {
       bar.querySelectorAll('.filter-chip').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       activeFilter = btn.dataset.type;
-      renderDropdown();
+      populateValueSelect();
     });
   });
 }
