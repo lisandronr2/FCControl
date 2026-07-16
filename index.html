@@ -238,6 +238,36 @@ html, body {
   font-size: 10px; font-weight: 600; opacity: .65; letter-spacing: .04em;
 }
 
+/* ══ Navegación entre dispositivos ══════════════════════════ */
+.card-nav {
+  display: flex; align-items: center; gap: 6px;
+  margin: 10px 0 0; padding-top: 8px;
+  border-top: .5px solid var(--line);
+}
+.nav-back-btn {
+  font-family: 'Barlow Condensed', sans-serif; font-size: 13px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  background: none; border: 1.5px solid var(--line); border-radius: 7px;
+  padding: 5px 10px; color: var(--ink); cursor: pointer;
+  white-space: nowrap; transition: background .1s;
+}
+.nav-back-btn:active { background: var(--paper2); }
+.nav-pos {
+  flex: 1; text-align: center;
+  font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--gray);
+}
+.nav-arrows { display: flex; gap: 4px; flex-shrink: 0; }
+.nav-arrow-btn {
+  width: 34px; height: 34px; border-radius: 7px;
+  border: 1.5px solid var(--line); background: none;
+  font-size: 22px; line-height: 1; color: var(--ink);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background .1s;
+}
+.nav-arrow-btn:active { background: var(--paper2); }
+.nav-arrow-btn:disabled { opacity: .22; cursor: default; }
+
 /* ══ Tablet 7-8" portrait / 10" (≥ 600 px) ══════════════════ */
 @media (min-width: 600px) {
   .frame    { max-width: 680px; }
@@ -909,6 +939,16 @@ html, body {
       </div>
       <div class="chips" id="cardChips"></div>
 
+      <!-- Barra de navegación entre dispositivos -->
+      <div class="card-nav" id="cardNav">
+        <button id="navBack"  class="nav-back-btn">← Volver</button>
+        <span   id="navPos"   class="nav-pos"></span>
+        <div class="nav-arrows">
+          <button id="navPrev" class="nav-arrow-btn" title="Anterior">‹</button>
+          <button id="navNext" class="nav-arrow-btn" title="Siguiente">›</button>
+        </div>
+      </div>
+
       <hr class="perf">
 
       <!-- Datos leídos del Sheet (generados dinámicamente) -->
@@ -1113,12 +1153,72 @@ function showResultsPanel(countText, printTitle){
   $('devCard').classList.remove('visible');
   resultsPanel.classList.add('open');
 }
+// Oculta el panel pero preserva innerHTML para poder volver con ← Volver
 function hideResultsPanel(){
+  resultsPanel.classList.remove('open');
+}
+// Oculta Y limpia — usar cuando empezamos una búsqueda nueva
+function clearResultsPanel(){
   resultsPanel.classList.remove('open');
   resultsList.innerHTML = '';
 }
 
 $('printBtn').addEventListener('click', () => window.print());
+
+/* ════ Navegación entre dispositivos ════════════════════════ */
+let navList  = [];   // nombres en el contexto actual
+let navIndex = -1;   // posición actual
+
+function updateNavUI(){
+  const hasList = navList.length > 1;
+  $('navPos').textContent    = hasList ? (navIndex + 1) + ' / ' + navList.length : '';
+  $('navPrev').disabled      = !hasList || navIndex <= 0;
+  $('navNext').disabled      = !hasList || navIndex >= navList.length - 1;
+  $('navPrev').style.display = hasList ? '' : 'none';
+  $('navNext').style.display = hasList ? '' : 'none';
+  $('navPos').style.display  = hasList ? '' : 'none';
+}
+
+function navigatePrev(){
+  if (navIndex <= 0) return;
+  navIndex--;
+  loadDevice(navList[navIndex]);
+}
+function navigateNext(){
+  if (navIndex >= navList.length - 1) return;
+  navIndex++;
+  loadDevice(navList[navIndex]);
+}
+function navigateBack(){
+  $('devCard').classList.remove('visible');
+  if (resultsList.innerHTML.trim()){
+    resultsPanel.classList.add('open');
+    $('emptyState').style.display = 'none';
+  } else {
+    $('emptyState').style.display = '';
+  }
+}
+
+$('navBack').addEventListener('click', navigateBack);
+$('navPrev').addEventListener('click', navigatePrev);
+$('navNext').addEventListener('click', navigateNext);
+
+/* ── Gestos swipe horizontal en la ficha ── */
+(function initSwipe(){
+  const card = $('devCard');
+  let x0 = 0, y0 = 0;
+  card.addEventListener('touchstart', e => {
+    x0 = e.touches[0].clientX;
+    y0 = e.touches[0].clientY;
+  }, { passive: true });
+  card.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - x0;
+    const dy = e.changedTouches[0].clientY - y0;
+    if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    if (dx < 0) navigateNext();
+    else        navigatePrev();
+  }, { passive: true });
+})();
 
 /* ── Obtiene MODELO del caché offline ── */
 function getModelo(nombre){
@@ -1214,9 +1314,16 @@ function executeSelectSearch(mode, val){
   });
   const sortedKeys = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'es'));
 
+  // Lista plana ordenada para navegación prev/next
+  const orderedNames = [];
+  sortedKeys.forEach(key =>
+    groups.get(key).sort((a, b) => a.name.localeCompare(b.name, 'es'))
+      .forEach(e => orderedNames.push(e.name))
+  );
+
   resultsList.innerHTML = '';
   sortedKeys.forEach(key => {
-    const items = groups.get(key);
+    const items = groups.get(key).slice().sort((a, b) => a.name.localeCompare(b.name, 'es'));
     const hdr = document.createElement('div');
     hdr.className = 'results-group-hdr';
     hdr.innerHTML =
@@ -1224,7 +1331,7 @@ function executeSelectSearch(mode, val){
       '<span class="results-group-hdr-count">' + items.length + ' disp.</span>';
     resultsList.appendChild(hdr);
 
-    items.sort((a, b) => a.name.localeCompare(b.name, 'es')).forEach(entry => {
+    items.forEach(entry => {
       const done   = dayLog.some(l => l.nombre === entry.name);
       const modelo = getModelo(entry.name);
       const div    = document.createElement('div');
@@ -1237,8 +1344,9 @@ function executeSelectSearch(mode, val){
           (done ? '✓ Listo' : 'Pendiente') +
         '</span>';
       div.addEventListener('click', () => {
-        hideResultsPanel();
-        loadDevice(entry.name);
+        navList  = orderedNames;
+        navIndex = orderedNames.indexOf(entry.name);
+        loadDevice(entry.name);  // renderCard ocultará el panel sin limpiar
       });
       resultsList.appendChild(div);
     });
@@ -1255,16 +1363,31 @@ function executeSelectSearch(mode, val){
 /* ── Listeners de los selects ── */
 $('searchModeSelect').addEventListener('change', () => {
   searchCol = $('searchModeSelect').value;
-  hideResultsPanel();
+  clearResultsPanel();
   $('devCard').classList.remove('visible');
   $('emptyState').style.display = '';
+  navList = []; navIndex = -1;
   populateValueSelect();
 });
 
 $('searchValueSelect').addEventListener('change', () => {
-  const val = $('searchValueSelect').value;
+  const val  = $('searchValueSelect').value;
   if (!val) return;
-  executeSelectSearch($('searchModeSelect').value, val);
+  const mode = $('searchModeSelect').value;
+
+  if (mode === 'NOMBRE'){
+    // Armar lista completa del select para poder ir prev/next entre nombres
+    const allOpts = [...$('searchValueSelect').options]
+      .filter(o => o.value).map(o => o.value);
+    navList  = allOpts;
+    navIndex = allOpts.indexOf(val);
+    clearResultsPanel();
+    $('emptyState').style.display = 'none';
+    loadDevice(val);
+  } else {
+    navList = []; navIndex = -1;
+    executeSelectSearch(mode, val);
+  }
 });
 
 /* ════ Cargar dispositivo desde el Sheet ═════════════════════ */
@@ -1408,9 +1531,10 @@ function renderCard(nombre, record, headers, estadoOptions){
   $('cardFecha').textContent = fechaVal || 'Sin registro';
 
   // Mostrar ficha
-  hideResultsPanel();
+  hideResultsPanel();   // oculta panel pero preserva lista para ← Volver
   $('emptyState').style.display = 'none';
   $('devCard').classList.add('visible');
+  updateNavUI();
   if (!hasSN) setTimeout(() => snInput.focus(), 120);
 }
 
