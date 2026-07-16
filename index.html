@@ -932,6 +932,12 @@ html, body {
           </div>
           <div class="err-msg" id="serialErr">El serial es obligatorio para guardar.</div>
         </div>
+        <div class="field" id="macField" style="display:none">
+          <label class="lbl" for="fMac">Dirección MAC</label>
+          <input id="fMac" type="text" class="text-f"
+            placeholder="Ej. 44:19:B6:XX:XX:XX"
+            autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
+        </div>
         <div class="field" id="estadoField" style="display:none;">
           <label class="lbl" for="fEstado" id="estadoLbl">Estado</label>
           <select id="fEstado"></select>
@@ -1331,6 +1337,17 @@ function renderCard(nombre, record, headers, estadoOptions){
   if (current) {
     current.estadoHeader = estadoHeader || null;
     current.serialHeader = serialHeader || null;
+    const macHeader = findHeaderKey(headers, ['MAC','MAC ADDRESS']);
+    current.macHeader = macHeader || null;
+    // Mostrar / pre-llenar campo MAC en Captura de campo
+    const macField = $('macField');
+    if (macHeader) {
+      $('fMac').value = record[macHeader] || '';
+      macField.style.display = '';
+    } else {
+      macField.style.display = 'none';
+      $('fMac').value = '';
+    }
   }
 
   // Selector de Estado (editable, con las opciones asignadas en el Sheet)
@@ -1511,8 +1528,8 @@ $('saveBtn').addEventListener('click', async () => {
   const tecnico = $('fTech').value.trim();
   const estadoVisible = $('estadoField').style.display !== 'none';
   const estado = estadoVisible ? $('fEstado').value : '';
-  // Incluir MAC si fue ingresada en el modal de configuración
-  const mac = current.macHeader ? $('camMacInput').value.trim() : '';
+  // Incluir MAC si el sheet tiene columna y el campo tiene valor
+  const mac = current.macHeader ? $('fMac').value.trim() : '';
 
   // Estado visual "guardando"
   const btn = $('saveBtn');
