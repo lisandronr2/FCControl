@@ -315,7 +315,7 @@ html, body {
 @media print {
   .topbar, .tab-bar, .searchby-row, .search-sel-row,
   .search-wrap, #emptyState, #devCard,
-  .print-btn, .offline-bar, .update-banner, .pending-pill { display: none !important; }
+  .print-btn, .offline-bar, .pending-pill { display: none !important; }
   .frame { max-width: 100%; }
   .view { padding: 0; overflow: visible; }
   .print-title { display: block; font-size: 15px; font-weight: 700;
@@ -539,27 +539,6 @@ html, body {
 .log-entry-sub { color: var(--gray); margin-top: 2px; line-height: 1.4; }
 .log-empty { text-align: center; color: var(--gray); padding: 20px 0; font-size: 13px; }
 
-
-/* ══ Update banner ════════════════════════════════════════════ */
-.update-banner {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 9px 15px; background: var(--blue3); color: #fff;
-  font-size: 13px; gap: 10px; flex-shrink: 0;
-  animation: slideDown .25s ease;
-}
-.update-banner.hidden { display: none; }
-.update-btn {
-  background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.4);
-  color: #fff; border-radius: 6px; padding: 5px 13px;
-  font-family: 'Barlow Condensed', sans-serif; font-size: 13px;
-  font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
-  cursor: pointer; white-space: nowrap;
-}
-.update-btn:active { background: rgba(255,255,255,.32); }
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
 
 /* ══ Toast ════════════════════════════════════════════════════ */
 .toast {
@@ -867,12 +846,6 @@ html, body {
       <span class="status-txt" id="statusTxt">Online</span>
     </div>
   </header>
-
-  <!-- Banner de actualización (oculto por defecto) -->
-  <div id="updateBanner" class="update-banner hidden">
-    <span>🔄 Nueva versión disponible</span>
-    <button id="updateBtn" class="update-btn">Actualizar</button>
-  </div>
 
   <!-- Tabs -->
   <nav class="tabs">
@@ -2103,38 +2076,33 @@ $('smMacBtn').addEventListener('click', () => {
   renderSerialMacSummary();
 });
 
-/* ════ Service Worker (PWA) ═══════════════════════════════════ */
+/* ════ Service Worker (PWA) — actualización automática ═══════ */
+// El SW nuevo se activa solo (skipWaiting en sw.js); acá solo hace falta
+// pedirle al navegador que revise si hay una versión más nueva del sw.js
+// (lo que dispara, en cadena, que se vuelva a traer el shell) cada vez que
+// hay una señal razonable de que vale la pena revisar: carga inicial,
+// vuelta de conexión, pestaña visible de nuevo, y cada pocos minutos
+// mientras la app queda abierta.
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
     try {
       const reg = await navigator.serviceWorker.register('./sw.js');
 
-      function offerUpdate(registration) {
-        const banner = $('updateBanner');
-        const btn    = $('updateBtn');
-        banner.classList.remove('hidden');
-        btn.onclick = () => {
-          if (registration.waiting)
-            registration.waiting.postMessage({ type: 'SKIP_WAITING' });
-        };
-      }
-
-      // SW ya estaba esperando (ej: página recargada sin actualizar antes)
-      if (reg.waiting) offerUpdate(reg);
-
-      // Nuevo SW encontrado durante esta sesión
-      reg.addEventListener('updatefound', () => {
-        const sw = reg.installing;
-        sw.addEventListener('statechange', () => {
-          if (sw.state === 'installed' && navigator.serviceWorker.controller)
-            offerUpdate(reg);
-        });
+      const checkForUpdate = () => reg.update().catch(() => {});
+      window.addEventListener('online', checkForUpdate);
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') checkForUpdate();
       });
+      setInterval(checkForUpdate, 10 * 60 * 1000); // cada 10 min
 
-      // Cuando el SW activa tras skipWaiting → recarga para servir versión nueva
+      // Cuando el nuevo SW toma control (tras skipWaiting) → recargar para
+      // servir la versión nueva de inmediato, sin pedir confirmación.
       let refreshing = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (!refreshing) { refreshing = true; window.location.reload(); }
+        if (refreshing) return;
+        refreshing = true;
+        showToast('🔄 Actualizando a la última versión…', '');
+        setTimeout(() => window.location.reload(), 500);
       });
 
     } catch (e) { /* sin SW: la app funciona igual, solo sin offline */ }

@@ -1,13 +1,18 @@
-// ── Incrementar CACHE_VERSION en cada nuevo deploy ────────────
-const CACHE_VERSION = 'v8';
-const CACHE_NAME    = 'fccontrol-' + CACHE_VERSION;
+// FCControl Service Worker — auto-actualización
+// El shell (HTML + assets base) se sirve network-first: si hay conexión,
+// siempre se trae la versión más nueva del servidor y se refresca la
+// caché; si no hay red, se usa la última copia guardada (modo offline).
+// No depende de bumpear una versión a mano: cada visita con conexión
+// revisa el servidor.
+
+const CACHE_NAME = 'fccontrol-shell';
 const SHELL = ['./index.html', './manifest.json', './icon.svg', './html5-qrcode.min.js'];
 
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL))
   );
-  // Sin skipWaiting: el nuevo SW espera hasta que el usuario confirme
+  self.skipWaiting(); // activa la nueva versión de inmediato, sin esperar confirmación
 });
 
 self.addEventListener('activate', event => {
@@ -20,15 +25,33 @@ self.addEventListener('activate', event => {
   );
 });
 
-// La página envía SKIP_WAITING cuando el usuario hace clic en "Actualizar"
-self.addEventListener('message', event => {
-  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
-});
-
 self.addEventListener('fetch', event => {
-  // Peticiones externas (Apps Script, Google Fonts) → directo a la red
-  if (!event.request.url.startsWith(self.location.origin)) return;
+  const req = event.request;
+  const url = new URL(req.url);
+
+  // Peticiones externas (Apps Script, Google Fonts, etc.) → directo a la red
+  if (url.origin !== self.location.origin) return;
+
+  const isNavigation = req.mode === 'navigate';
+  const isShellAsset = SHELL.some(p => url.pathname.endsWith(p.replace('./', '/')));
+
+  if (isNavigation || isShellAsset) {
+    // Network-first: intenta traer la versión más nueva; si falla, usa caché
+    event.respondWith(
+      fetch(req, { cache: 'no-cache' })
+        .then(res => {
+          if (res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(isNavigation ? './index.html' : req, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(isNavigation ? './index.html' : req))
+    );
+    return;
+  }
+  // El resto (imágenes, fuentes locales, etc.) → cache-first
   event.respondWith(
-    caches.match(event.request).then(cached => cached || fetch(event.request))
+    caches.match(req).then(cached => cached || fetch(req))
   );
 });
