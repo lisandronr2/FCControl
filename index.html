@@ -284,9 +284,6 @@ html, body {
 
   .view     { padding: 22px 28px 110px; }
 
-  .filter-bar   { padding: 10px 28px 8px; }
-  .filter-chip  { font-size: 14px; padding: 7px 16px; }
-
   .searchby-chip { font-size: 14px; padding: 6px 14px; }
   .searchby-lbl  { font-size: 12px; }
 
@@ -310,14 +307,13 @@ html, body {
   .topbar     { padding: 22px 36px 18px; }
   .brand-name { font-size: 40px; }
   .view       { padding: 28px 36px 120px; }
-  .filter-bar { padding: 10px 36px 8px; }
   .camcfg-card { max-width: 740px; }
 }
 
 /* ══ Print ═══════════════════════════════════════════════════ */
 .print-title { display: none; }
 @media print {
-  .topbar, .tab-bar, .filter-bar, .searchby-row, .search-sel-row,
+  .topbar, .tab-bar, .searchby-row, .search-sel-row,
   .search-wrap, #emptyState, #devCard,
   .print-btn, .offline-bar, .update-banner, .pending-pill { display: none !important; }
   .frame { max-width: 100%; }
@@ -580,22 +576,6 @@ html, body {
 .toast.ok  { background: var(--ok); }
 .toast.err { background: var(--red); }
 
-/* ══ Filter bar ═══════════════════════════════════════════════ */
-.filter-bar {
-  display: flex; gap: 6px; padding: 10px 15px 8px; overflow-x: auto;
-  flex-shrink: 0; background: var(--paper);
-  border-bottom: .5px solid var(--line); scrollbar-width: none;
-}
-.filter-bar::-webkit-scrollbar { display: none; }
-.filter-chip {
-  flex-shrink: 0; padding: 5px 12px; border-radius: 20px;
-  font-family: 'Barlow Condensed', sans-serif; font-size: 13px;
-  font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
-  border: 1.5px solid var(--ink); background: transparent;
-  color: var(--ink); cursor: pointer; white-space: nowrap; transition: background .12s;
-}
-.filter-chip.active { background: var(--ink); color: var(--paper); }
-
 /* ══ Scanner modal ════════════════════════════════════════════ */
 .scan-modal {
   position: fixed; inset: 0; background: rgba(0,0,0,.92);
@@ -676,27 +656,6 @@ html, body {
 }
 .pending-pill.hidden { display: none; }
 
-/* ══ Resumen por tipo ═════════════════════════════════════════ */
-.type-card {
-  background: var(--white); border: 1.5px solid var(--ink);
-  border-radius: 12px; padding: 14px 13px; margin-bottom: 12px;
-}
-.type-card-head {
-  font-family: 'Barlow Condensed', sans-serif;
-  font-size: 15px; font-weight: 700; text-transform: uppercase; margin-bottom: 10px;
-}
-.type-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 5px 0; border-bottom: .5px solid var(--line); font-size: 12px;
-}
-.type-row:last-child { border-bottom: none; }
-.type-name {
-  font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
-  font-size: 13px; text-transform: uppercase; min-width: 72px;
-}
-.type-bar-wrap { flex: 1; height: 6px; background: var(--paper2); border-radius: 3px; overflow: hidden; }
-.type-bar-fill  { height: 100%; background: var(--orange); border-radius: 3px; transition: width .4s; }
-
 /* ══ Resumen por Serial / MAC ═════════════════════════════════ */
 .sm-card {
   background: var(--white); border: 1.5px solid var(--ink);
@@ -728,7 +687,6 @@ html, body {
   text-transform: uppercase; letter-spacing: .04em; color: var(--blue3);
 }
 .sm-subhdr-count { color: var(--gray); font-weight: 600; }
-.type-count { font-size: 11px; color: var(--gray); white-space: nowrap; min-width: 44px; text-align: right; }
 
 /* ══ Configurar cámara ════════════════════════════════════════ */
 .camcfg-btn {
@@ -928,11 +886,6 @@ html, body {
     <span id="offlineBarTime"></span>
   </div>
 
-  <!-- Filter chips (se genera dinámicamente) -->
-  <div id="filterBar" class="filter-bar" style="display:none">
-    <button class="filter-chip active" data-type="ALL">Todos</button>
-  </div>
-
   <!-- ══ Vista: Búsqueda ══ -->
   <div id="view-search" class="view">
 
@@ -1062,8 +1015,6 @@ html, body {
         <div class="sum-l">Pendientes</div>
       </div>
     </div>
-    <div id="typeBreakdown"></div>
-
     <div class="sm-card">
       <div class="sm-head">
         <span class="sm-title">Serial / MAC registrados</span>
@@ -1157,7 +1108,6 @@ async function loadNames(){
     localStorage.setItem(KEYS.names, JSON.stringify(names));
     totalDevices = names.length;
     localStorage.setItem(KEYS.total, String(totalDevices));
-    buildFilterChips();
     populateValueSelect();
   } catch(e){
     // Usa caché local si no hay red
@@ -1295,9 +1245,7 @@ function buildValueOptions(){
   valueOptions = [];
 
   if (mode === 'NOMBRE'){
-    const pool = activeFilter === 'ALL' ? names
-      : names.filter(e => getDeviceType(e.name) === activeFilter);
-    pool.slice().sort((a, b) => a.name.localeCompare(b.name, 'es')).forEach(e => {
+    names.slice().sort((a, b) => a.name.localeCompare(b.name, 'es')).forEach(e => {
       valueOptions.push({ value: e.name, label: e.name });
     });
   } else if (mode === 'CT'){
@@ -1825,7 +1773,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 /* ════ Resumen del día ════════════════════════════════════════ */
 function renderSummary(){
   const total = dayLog.length;
-  const pend  = Math.max(0, totalDevices - total);
+  const pend  = Math.max(0, totalDevices - collectFilledEntries('SERIAL').length);
   const pct   = totalDevices > 0 ? Math.round((total / totalDevices) * 100) : 0;
 
   $('sumTotal').textContent  = total;
@@ -1833,7 +1781,6 @@ function renderSummary(){
   $('progPct').textContent   = pct + '%';
   $('progFill').style.width  = pct + '%';
 
-  renderTypeBreakdown();
   renderSerialMacSummary();
 
   const list = $('logList');
@@ -1946,39 +1893,6 @@ async function autoSync() {
 
 $('syncBtn').addEventListener('click', syncAllDevices);
 
-/* ════ Tipo de dispositivo ═══════════════════════════════════ */
-function getDeviceType(name) {
-  const m = String(name).match(/^[A-Z]+/);
-  return m ? m[0] : 'OTROS';
-}
-
-/* ════ Filter chips ══════════════════════════════════════════ */
-let activeFilter = 'ALL';
-
-function buildFilterChips() {
-  if (!names.length) return;
-  const bar = $('filterBar');
-  const types = [...new Set(names.map(e => getDeviceType(typeof e === 'string' ? e : e.name)))].sort();
-  bar.innerHTML = '<button class="filter-chip active" data-type="ALL">Todos (' + names.length + ')</button>';
-  types.forEach(t => {
-    const count = names.filter(e => getDeviceType(typeof e === 'string' ? e : e.name) === t).length;
-    const btn = document.createElement('button');
-    btn.className = 'filter-chip';
-    btn.dataset.type = t;
-    btn.textContent = t + ' (' + count + ')';
-    bar.appendChild(btn);
-  });
-  bar.style.display = '';
-  bar.querySelectorAll('.filter-chip').forEach(btn => {
-    btn.addEventListener('click', () => {
-      bar.querySelectorAll('.filter-chip').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      activeFilter = btn.dataset.type;
-      populateValueSelect();
-    });
-  });
-}
-
 /* ════ Scanner de código de barras / QR (iOS + Android) ══════ */
 let scanner = null;
 
@@ -2082,57 +1996,15 @@ async function syncPendingQueue() {
 // Inicializar al cargar
 updatePendingBadge();
 updateOfflineBar();
-if (names.length) buildFilterChips();
 autoSync();
-
-/* ════ Breakdown por tipo ════════════════════════════════════ */
-function renderTypeBreakdown() {
-  const container = $('typeBreakdown');
-  if (!names.length) { container.innerHTML = ''; return; }
-
-  const typeTotal = {}, typeDone = {};
-  names.forEach(e => {
-    const t = getDeviceType(typeof e === 'string' ? e : e.name);
-    typeTotal[t] = (typeTotal[t] || 0) + 1;
-  });
-  dayLog.forEach(e => {
-    const t = getDeviceType(e.nombre);
-    typeDone[t] = (typeDone[t] || 0) + 1;
-  });
-
-  const rows = Object.keys(typeTotal).sort().map(t => {
-    const total = typeTotal[t], done = typeDone[t] || 0;
-    const pct   = Math.round((done / total) * 100);
-    return `<div class="type-row">
-      <span class="type-name">${t}</span>
-      <div class="type-bar-wrap"><div class="type-bar-fill" style="width:${pct}%"></div></div>
-      <span class="type-count">${done}/${total}</span>
-    </div>`;
-  }).join('');
-
-  container.innerHTML = `<div class="type-card">
-    <div class="type-card-head">Avance por tipo</div>${rows}
-  </div>`;
-}
 
 /* ════ Resumen por Serial / MAC (agrupado por CT → Ubicación) ═ */
 let smCol = 'SERIAL';
 
-function renderSerialMacSummary(){
-  const countEl = $('smCount');
-  const listEl  = $('smList');
-  const map     = getDevicesMap();
-  const label   = smCol === 'SERIAL' ? 'Serial' : 'MAC';
-
-  if (!Object.keys(map).length){
-    countEl.textContent = '';
-    listEl.innerHTML = '<div class="dd-empty">Sincronizá los datos offline (⟳) para ver este resumen.</div>';
-    return;
-  }
-
-  // Encuentra el encabezado de columna (SERIAL/MAC) usando los headers de cada dispositivo,
-  // ya que cada entrada del caché offline trae su propia copia de headers.
-  const candidates = smCol === 'SERIAL' ? ['SERIAL', 'SERIAL NUMBER'] : ['MAC', 'MAC ADDRESS'];
+// Dispositivos cuyo SERIAL o MAC (según col) no está vacío, con datos de CT/Ubicación
+function collectFilledEntries(col){
+  const map = getDevicesMap();
+  const candidates = col === 'SERIAL' ? ['SERIAL', 'SERIAL NUMBER'] : ['MAC', 'MAC ADDRESS'];
 
   const entries = [];
   Object.values(map).forEach(dev => {
@@ -2154,6 +2026,21 @@ function renderSerialMacSummary(){
       valor:     val
     });
   });
+  return entries;
+}
+
+function renderSerialMacSummary(){
+  const countEl = $('smCount');
+  const listEl  = $('smList');
+  const label   = smCol === 'SERIAL' ? 'Serial' : 'MAC';
+
+  if (!Object.keys(getDevicesMap()).length){
+    countEl.textContent = '';
+    listEl.innerHTML = '<div class="dd-empty">Sincronizá los datos offline (⟳) para ver este resumen.</div>';
+    return;
+  }
+
+  const entries = collectFilledEntries(smCol);
 
   countEl.textContent = entries.length + ' dispositivo' + (entries.length !== 1 ? 's' : '') +
     ' con ' + label + ' registrado' + (entries.length !== 1 ? 's' : '');
