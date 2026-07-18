@@ -500,6 +500,7 @@ html, body {
 
 /* ══ Resumen del día ══════════════════════════════════════════ */
 .sum-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.sum-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
 .sum-card {
   background: var(--white); border: 1.5px solid var(--ink);
   border-radius: 12px; padding: 15px 13px;
@@ -508,6 +509,9 @@ html, body {
   font-family: 'Barlow Condensed', sans-serif;
   font-size: 40px; font-weight: 700; line-height: 1;
 }
+.sum-grid-3 .sum-card { padding: 13px 10px; }
+.sum-grid-3 .sum-n { font-size: 30px; }
+.sum-grid-3 .sum-l { font-size: 11px; }
 .sum-l { font-size: 12px; color: var(--gray); margin-top: 3px; }
 
 .prog-card {
@@ -996,14 +1000,18 @@ html, body {
         <div class="prog-fill" id="progFill" style="width:0%"></div>
       </div>
     </div>
-    <div class="sum-grid">
+    <div class="sum-grid sum-grid-3">
       <div class="sum-card">
         <div class="sum-n" id="sumTotal" style="color:var(--blue)">0</div>
         <div class="sum-l">Capturados hoy</div>
       </div>
       <div class="sum-card">
-        <div class="sum-n" id="sumPend" style="color:var(--warn)">0</div>
-        <div class="sum-l">Pendientes</div>
+        <div class="sum-n" id="sumPendSerial" style="color:var(--warn)">0</div>
+        <div class="sum-l">Pendientes Serial</div>
+      </div>
+      <div class="sum-card">
+        <div class="sum-n" id="sumPendMac" style="color:var(--red)">0</div>
+        <div class="sum-l">Pendientes MAC</div>
       </div>
     </div>
     <div class="sm-card">
@@ -1841,12 +1849,14 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
 /* ════ Resumen del día ════════════════════════════════════════ */
 function renderSummary(){
-  const total = dayLog.length;
-  const pend  = Math.max(0, totalDevices - collectFilledEntries('SERIAL').length);
-  const pct   = totalDevices > 0 ? Math.round((total / totalDevices) * 100) : 0;
+  const total      = dayLog.length;
+  const pendSerial = Math.max(0, totalDevices - collectFilledEntries('SERIAL').length);
+  const pendMac    = Math.max(0, totalDevices - collectFilledEntries('MAC').length);
+  const pct        = totalDevices > 0 ? Math.round((total / totalDevices) * 100) : 0;
 
-  $('sumTotal').textContent  = total;
-  $('sumPend').textContent   = pend;
+  $('sumTotal').textContent      = total;
+  $('sumPendSerial').textContent = pendSerial;
+  $('sumPendMac').textContent    = pendMac;
   $('progPct').textContent   = pct + '%';
   $('progFill').style.width  = pct + '%';
 
