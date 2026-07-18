@@ -214,6 +214,7 @@ html, body {
   border: none; cursor: pointer; transition: background .12s;
 }
 .print-btn:hover { background: var(--blue); }
+.export-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
 .results-list {
   border: 1.5px solid var(--ink); border-radius: 10px;
@@ -310,23 +311,28 @@ html, body {
   .camcfg-card { max-width: 740px; }
 }
 
-/* ══ Print ═══════════════════════════════════════════════════ */
+/* ══ Print / Exportar a PDF ══════════════════════════════════
+   #printExport es un contenedor genérico que se llena en JS con
+   el título + lista a exportar (resultados de búsqueda o resumen)
+   justo antes de llamar a window.print(); así imprimir funciona
+   sin importar qué vista esté activa en pantalla. */
 .print-title { display: none; }
+#printExport { display: none; }
 @media print {
-  .topbar, .tab-bar, .searchby-row, .search-sel-row,
-  .search-wrap, #emptyState, #devCard,
-  .print-btn, .offline-bar, .pending-pill { display: none !important; }
-  .frame { max-width: 100%; }
-  .view { padding: 0; overflow: visible; }
-  .print-title { display: block; font-size: 15px; font-weight: 700;
+  body.print-mode .frame > *:not(#printExport) { display: none !important; }
+  body.print-mode #printExport {
+    display: block !important; max-width: 100%; padding: 0;
+  }
+  body.print-mode #printExport .print-title {
+    display: block; font-size: 15px; font-weight: 700;
     text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px;
-    padding-bottom: 6px; border-bottom: 1.5px solid #333; color: #111; }
-  .results-panel { display: block !important; }
+    padding-bottom: 6px; border-bottom: 1.5px solid #333; color: #111;
+  }
   .results-list { border: none; border-top: 1px solid #ccc; border-radius: 0; }
   .results-item { border-bottom: 1px solid #eee; cursor: default; break-inside: avoid; }
   .results-item--child { padding-left: 24px; }
   .results-item:hover { background: none; }
-  .results-group-hdr { background: #eee; color: #111; break-after: avoid; }
+  .results-group-hdr, .sm-subhdr { background: #eee; color: #111; break-after: avoid; }
   .dd-badge { border: 1px solid currentColor; }
 }
 .dd-badge {
@@ -528,6 +534,11 @@ html, body {
   font-size: 15px; font-weight: 700; text-transform: uppercase;
   margin-bottom: 10px;
 }
+.log-head-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; flex-wrap: wrap;
+}
+.log-head-row .log-head { margin-bottom: 10px; }
 .log-entry {
   padding: 8px 0; border-bottom: .5px solid var(--line); font-size: 12px;
 }
@@ -657,7 +668,11 @@ html, body {
   color: var(--ink); cursor: pointer; white-space: nowrap; transition: background .12s;
 }
 .sm-toggle-btn.active { background: var(--ink); color: var(--paper); }
-.sm-count { font-size: 12px; color: var(--gray); margin-bottom: 8px; }
+.sm-subrow {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 8px; flex-wrap: wrap;
+}
+.sm-count { font-size: 12px; color: var(--gray); }
 .sm-list { border-top: .5px solid var(--line); }
 .sm-subhdr {
   display: flex; align-items: center; justify-content: space-between;
@@ -883,7 +898,10 @@ html, body {
     <div id="resultsPanel" class="results-panel">
       <div class="results-header">
         <span id="resultsCount" class="results-count"></span>
-        <button class="print-btn" id="printBtn">🖨 Imprimir</button>
+        <div class="export-actions">
+          <button class="print-btn" id="printBtn" title="Exportar a PDF">🖨 PDF</button>
+          <button class="print-btn" id="exportCsvBtn" title="Exportar a Excel">📊 Excel</button>
+        </div>
       </div>
       <div id="printTitle" class="print-title"></div>
       <div class="results-list" id="resultsList"></div>
@@ -996,15 +1014,30 @@ html, body {
           <button class="sm-toggle-btn" id="smMacBtn" data-col="MAC">MAC</button>
         </div>
       </div>
-      <div class="sm-count" id="smCount"></div>
+      <div class="sm-subrow">
+        <span class="sm-count" id="smCount"></span>
+        <div class="export-actions">
+          <button class="print-btn" id="smPrintBtn" title="Exportar a PDF">🖨 PDF</button>
+          <button class="print-btn" id="smCsvBtn" title="Exportar a Excel">📊 Excel</button>
+        </div>
+      </div>
       <div class="sm-list" id="smList"></div>
     </div>
 
     <div class="log-card">
-      <div class="log-head">Registro de hoy</div>
+      <div class="log-head-row">
+        <div class="log-head">Registro de hoy</div>
+        <div class="export-actions">
+          <button class="print-btn" id="logPrintBtn" title="Exportar a PDF">🖨 PDF</button>
+          <button class="print-btn" id="logCsvBtn" title="Exportar a Excel">📊 Excel</button>
+        </div>
+      </div>
       <div id="logList"><div class="log-empty">Sin capturas registradas hoy.</div></div>
     </div>
   </div>
+
+  <!-- Contenedor genérico para exportar a PDF (poblado en JS antes de imprimir) -->
+  <div id="printExport"></div>
 
 </div><!-- /frame -->
 
@@ -1059,6 +1092,41 @@ function showToast(msg, type = ''){
   t.textContent = msg;
   t.className   = 'toast show' + (type ? ' ' + type : '');
   toastTimer    = setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+/* ════ Exportar a PDF / Excel ════════════════════════════════
+   Utilidades genéricas usadas tanto por los resultados de búsqueda
+   como por las tarjetas del Resumen. */
+
+// Imprime (→ "Guardar como PDF") el título + HTML dado, sin importar
+// qué vista esté activa en pantalla.
+function printAsPDF(title, bodyHtml){
+  const area = $('printExport');
+  area.innerHTML = '<div class="print-title">' + title + '</div>' + bodyHtml;
+  document.body.classList.add('print-mode');
+  window.print();
+}
+window.addEventListener('afterprint', () => {
+  document.body.classList.remove('print-mode');
+  $('printExport').innerHTML = '';
+});
+
+// Descarga un archivo .csv (se abre directo en Excel). rows: array de arrays.
+function downloadCSV(filename, headers, rows){
+  const esc = v => {
+    const s = (v === null || v === undefined) ? '' : String(v);
+    return /[",;\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [headers, ...rows].map(r => r.map(esc).join(';'));
+  // BOM UTF-8 para que Excel muestre bien tildes/Ñ
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function setStatus(online){
@@ -1136,7 +1204,22 @@ function clearResultsPanel(){
   resultsList.innerHTML = '';
 }
 
-$('printBtn').addEventListener('click', () => window.print());
+// Filas planas del último listado de resultados (para exportar a Excel)
+let lastSearchExport = [];
+
+$('printBtn').addEventListener('click', () => {
+  if (!resultsList.innerHTML.trim()){ showToast('No hay resultados para exportar.', 'err'); return; }
+  printAsPDF($('printTitle').textContent, '<div class="results-list">' + resultsList.innerHTML + '</div>');
+});
+
+$('exportCsvBtn').addEventListener('click', () => {
+  if (!lastSearchExport.length){ showToast('No hay resultados para exportar.', 'err'); return; }
+  downloadCSV(
+    'fccontrol_busqueda.csv',
+    ['Dispositivo', 'CT', 'Báculo/Rack', 'Modelo', 'Estado'],
+    lastSearchExport.map(e => [e.nombre, e.ct, e.ubicacion, e.modelo, e.estado])
+  );
+});
 
 /* ════ Navegación entre dispositivos ════════════════════════ */
 let navList  = [];   // nombres en el contexto actual
@@ -1319,6 +1402,7 @@ function executeSelectSearch(mode, val){
   hideResultsPanel();
   $('devCard').classList.remove('visible');
   $('emptyState').style.display = 'none';
+  lastSearchExport = [];
 
   if (mode === 'NOMBRE'){
     loadDevice(val);
@@ -1379,6 +1463,10 @@ function executeSelectSearch(mode, val){
         loadDevice(entry.name);  // renderCard ocultará el panel sin limpiar
       });
       resultsList.appendChild(div);
+      lastSearchExport.push({
+        nombre: entry.name, ct: entry.ct || '—', ubicacion: entry.ubicacion || '—',
+        modelo: modelo || '', estado: done ? 'Listo' : 'Pendiente'
+      });
     });
   });
 
@@ -1397,6 +1485,7 @@ $('searchModeSelect').addEventListener('change', () => {
   $('devCard').classList.remove('visible');
   $('emptyState').style.display = '';
   navList = []; navIndex = -1;
+  lastSearchExport = [];
   populateValueSelect();
 });
 
@@ -1781,6 +1870,30 @@ function renderSummary(){
   ).join('');
 }
 
+$('logPrintBtn').addEventListener('click', () => {
+  if (!dayLog.length){ showToast('No hay capturas registradas hoy.', 'err'); return; }
+  const html = [...dayLog].reverse().map(e =>
+    '<div class="results-item">' +
+      '<span class="ri-main">' + e.nombre + '</span>' +
+      '<span class="ri-sub">SN: ' + e.serial +
+        (e.estado ? ' · ' + e.estado : '') +
+        (e.tecnico ? ' · ' + e.tecnico : '') +
+        ' · ' + e.time +
+      '</span>' +
+    '</div>'
+  ).join('');
+  printAsPDF('Registro de hoy', '<div class="results-list">' + html + '</div>');
+});
+
+$('logCsvBtn').addEventListener('click', () => {
+  if (!dayLog.length){ showToast('No hay capturas registradas hoy.', 'err'); return; }
+  downloadCSV(
+    'fccontrol_registro_hoy.csv',
+    ['Dispositivo', 'Serial', 'Estado', 'Técnico', 'Hora'],
+    [...dayLog].reverse().map(e => [e.nombre, e.serial, e.estado || '', e.tecnico || '', e.time])
+  );
+});
+
 /* ════ Caché offline de dispositivos ════════════════════════ */
 function getDevicesMap() {
   try { return JSON.parse(localStorage.getItem(KEYS.devicesMap) || '{}'); } catch(e) { return {}; }
@@ -2009,28 +2122,9 @@ function collectFilledEntries(col){
   return entries;
 }
 
-function renderSerialMacSummary(){
-  const countEl = $('smCount');
-  const listEl  = $('smList');
-  const label   = smCol === 'SERIAL' ? 'Serial' : 'MAC';
-
-  if (!Object.keys(getDevicesMap()).length){
-    countEl.textContent = '';
-    listEl.innerHTML = '<div class="dd-empty">Sincronizá los datos offline (⟳) para ver este resumen.</div>';
-    return;
-  }
-
-  const entries = collectFilledEntries(smCol);
-
-  countEl.textContent = entries.length + ' dispositivo' + (entries.length !== 1 ? 's' : '') +
-    ' con ' + label + ' registrado' + (entries.length !== 1 ? 's' : '');
-
-  if (!entries.length){
-    listEl.innerHTML = '<div class="dd-empty">Sin dispositivos con ' + label + ' registrado.</div>';
-    return;
-  }
-
-  // Agrupar: CT → Ubicación (BTV)
+// Arma el HTML agrupado CT → Ubicación (BTV) a partir de entries; se usa
+// tanto para pintar la lista en pantalla como para exportar a PDF.
+function buildGroupedListHtml(entries){
   const ctGroups = new Map();
   entries.forEach(e => {
     if (!ctGroups.has(e.ct)) ctGroups.set(e.ct, new Map());
@@ -2060,7 +2154,31 @@ function renderSerialMacSummary(){
       });
     });
   });
-  listEl.innerHTML = html;
+  return html;
+}
+
+function renderSerialMacSummary(){
+  const countEl = $('smCount');
+  const listEl  = $('smList');
+  const label   = smCol === 'SERIAL' ? 'Serial' : 'MAC';
+
+  if (!Object.keys(getDevicesMap()).length){
+    countEl.textContent = '';
+    listEl.innerHTML = '<div class="dd-empty">Sincronizá los datos offline (⟳) para ver este resumen.</div>';
+    return;
+  }
+
+  const entries = collectFilledEntries(smCol);
+
+  countEl.textContent = entries.length + ' dispositivo' + (entries.length !== 1 ? 's' : '') +
+    ' con ' + label + ' registrado' + (entries.length !== 1 ? 's' : '');
+
+  if (!entries.length){
+    listEl.innerHTML = '<div class="dd-empty">Sin dispositivos con ' + label + ' registrado.</div>';
+    return;
+  }
+
+  listEl.innerHTML = buildGroupedListHtml(entries);
 }
 
 $('smSerialBtn').addEventListener('click', () => {
@@ -2074,6 +2192,24 @@ $('smMacBtn').addEventListener('click', () => {
   $('smMacBtn').classList.add('active');
   $('smSerialBtn').classList.remove('active');
   renderSerialMacSummary();
+});
+
+$('smPrintBtn').addEventListener('click', () => {
+  const entries = collectFilledEntries(smCol);
+  if (!entries.length){ showToast('No hay dispositivos para exportar.', 'err'); return; }
+  const label = smCol === 'SERIAL' ? 'Serial' : 'MAC';
+  printAsPDF(label + ' registrados', '<div class="results-list">' + buildGroupedListHtml(entries) + '</div>');
+});
+
+$('smCsvBtn').addEventListener('click', () => {
+  const entries = collectFilledEntries(smCol);
+  if (!entries.length){ showToast('No hay dispositivos para exportar.', 'err'); return; }
+  const label = smCol === 'SERIAL' ? 'Serial' : 'MAC';
+  downloadCSV(
+    'fccontrol_' + smCol.toLowerCase() + '.csv',
+    ['Dispositivo', 'CT', 'Báculo/Rack', label],
+    entries.map(e => [e.nombre, e.ct, e.ubicacion, e.valor])
+  );
 });
 
 /* ════ Service Worker (PWA) — actualización automática ═══════ */
