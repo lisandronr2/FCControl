@@ -138,6 +138,11 @@ html, body {
 .search-sel:disabled { opacity: .45; cursor: default; }
 .ri-sub { font-size: 11px; color: var(--gray); white-space: nowrap; }
 
+/* Combo de valor con autocompletado (input + dropdown) */
+.search-combo { flex: 1; min-width: 0; margin-bottom: 0; }
+.search-combo .search-sel.value { width: 100%; cursor: text; }
+.search-combo .dropdown { top: calc(100% + 5px); }
+
 /* ══ Buscador con desplegable ════════════════════════════════ */
 .search-wrap { position: relative; margin-bottom: 4px; }
 
@@ -905,12 +910,14 @@ html, body {
         <option value="CT">CT</option>
         <option value="UBICACION">Ubicación</option>
       </select>
-      <select id="searchValueSelect" class="search-sel value" disabled>
-        <option value="">— Cargando… —</option>
-      </select>
+      <div class="search-wrap search-combo">
+        <input id="searchValueInput" class="search-sel value" type="text" inputmode="search"
+               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+               placeholder="— Cargando… —" disabled>
+        <div id="searchValueDropdown" class="dropdown"></div>
+      </div>
     </div>
     <!-- Stubs para referencias JS heredadas (ocultos) -->
-    <div id="dropdown" style="display:none"></div>
     <input id="searchInput" style="display:none">
     <button id="clearBtn" style="display:none"></button>
 
@@ -1140,7 +1147,6 @@ let searchCol = 'NOMBRE';
 
 // Stubs — elementos ocultos preservados para compatibilidad con refs heredadas
 const searchInput  = $('searchInput');
-const dropdown     = $('dropdown');
 const clearBtn     = $('clearBtn');
 
 const resultsPanel = $('resultsPanel');
@@ -1232,56 +1238,115 @@ function getModelo(nombre){
   return key ? (result[key] || '') : '';
 }
 
-/* ── Poblar el select de valores según el modo ── */
-function populateValueSelect(){
+/* ── Normaliza texto para comparar sin acentos/mayúsculas ── */
+function normalizeTxt(s){
+  return (s || '').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+/* ── Construye la lista de opciones candidatas según el modo ── */
+let valueOptions = []; // [{value, label}]
+
+function buildValueOptions(){
   const mode = $('searchModeSelect').value;
-  const sel  = $('searchValueSelect');
-  sel.innerHTML = '';
-
-  if (!names.length){
-    sel.innerHTML = '<option value="">— Sin datos —</option>';
-    sel.disabled = true;
-    return;
-  }
-
-  const placeholder = document.createElement('option');
-  placeholder.value = '';
-  placeholder.textContent = mode === 'NOMBRE' ? '— Elige un nombre —'
-    : mode === 'CT' ? '— Elige un CT —'
-    : '— Elige una ubicación —';
-  sel.appendChild(placeholder);
+  valueOptions = [];
 
   if (mode === 'NOMBRE'){
     const pool = activeFilter === 'ALL' ? names
       : names.filter(e => getDeviceType(e.name) === activeFilter);
     pool.slice().sort((a, b) => a.name.localeCompare(b.name, 'es')).forEach(e => {
-      const opt = document.createElement('option');
-      opt.value = e.name;
-      opt.textContent = e.name;
-      sel.appendChild(opt);
+      valueOptions.push({ value: e.name, label: e.name });
     });
   } else if (mode === 'CT'){
     const cts = [...new Set(names.map(e => e.ct).filter(Boolean))]
       .sort((a, b) => a.localeCompare(b, 'es'));
     cts.forEach(ct => {
       const cnt = names.filter(e => e.ct === ct).length;
-      const opt = document.createElement('option');
-      opt.value = ct;
-      opt.textContent = ct + '  (' + cnt + ' disp.)';
-      sel.appendChild(opt);
+      valueOptions.push({ value: ct, label: ct + '  (' + cnt + ' disp.)' });
     });
   } else {
     const ubics = [...new Set(names.map(e => e.ubicacion).filter(Boolean))]
       .sort((a, b) => a.localeCompare(b, 'es'));
     ubics.forEach(u => {
       const cnt = names.filter(e => e.ubicacion === u).length;
-      const opt = document.createElement('option');
-      opt.value = u;
-      opt.textContent = u + '  (' + cnt + ' disp.)';
-      sel.appendChild(opt);
+      valueOptions.push({ value: u, label: u + '  (' + cnt + ' disp.)' });
     });
   }
-  sel.disabled = false;
+}
+
+/* ── Prepara el input de valor según el modo (reemplaza el viejo <select>) ── */
+function populateValueSelect(){
+  const mode  = $('searchModeSelect').value;
+  const input = $('searchValueInput');
+  input.value = '';
+  closeValueDropdown();
+
+  if (!names.length){
+    input.placeholder = '— Sin datos —';
+    input.disabled = true;
+    return;
+  }
+
+  buildValueOptions();
+  input.placeholder = mode === 'NOMBRE' ? 'Escribe 2-3 letras del nombre…'
+    : mode === 'CT' ? 'Escribe 2-3 letras del CT…'
+    : 'Escribe 2-3 letras de la ubicación…';
+  input.disabled = false;
+}
+
+/* ── Autocompletado del input de valor ── */
+function closeValueDropdown(){
+  const dd = $('searchValueDropdown');
+  dd.classList.remove('open');
+  dd.innerHTML = '';
+}
+
+function renderValueDropdown(query){
+  const dd = $('searchValueDropdown');
+  const q  = normalizeTxt(query.trim());
+
+  if (q.length < 2){
+    closeValueDropdown();
+    return;
+  }
+
+  const matches = valueOptions.filter(o => normalizeTxt(o.value).includes(q) || normalizeTxt(o.label).includes(q));
+
+  dd.innerHTML = '';
+  if (!matches.length){
+    dd.innerHTML = '<div class="dd-empty">Sin coincidencias</div>';
+    dd.classList.add('open');
+    return;
+  }
+
+  matches.slice(0, 60).forEach(o => {
+    const item = document.createElement('div');
+    item.className = 'dd-item';
+    item.innerHTML = '<span class="dd-name">' + highlight(o.label, query.trim()) + '</span>';
+    item.addEventListener('mousedown', e => {
+      e.preventDefault(); // evita blur antes del click
+      chooseValueOption(o);
+    });
+    dd.appendChild(item);
+  });
+  dd.classList.add('open');
+}
+
+function chooseValueOption(o){
+  const mode  = $('searchModeSelect').value;
+  const input = $('searchValueInput');
+  input.value = o.value;
+  closeValueDropdown();
+
+  if (mode === 'NOMBRE'){
+    navList  = valueOptions.map(v => v.value);
+    navIndex = navList.indexOf(o.value);
+    clearResultsPanel();
+    $('emptyState').style.display = 'none';
+    loadDevice(o.value);
+  } else {
+    navList = []; navIndex = -1;
+    executeSelectSearch(mode, o.value);
+  }
 }
 
 /* ── Ejecutar búsqueda al seleccionar un valor ── */
@@ -1370,24 +1435,18 @@ $('searchModeSelect').addEventListener('change', () => {
   populateValueSelect();
 });
 
-$('searchValueSelect').addEventListener('change', () => {
-  const val  = $('searchValueSelect').value;
-  if (!val) return;
-  const mode = $('searchModeSelect').value;
-
-  if (mode === 'NOMBRE'){
-    // Armar lista completa del select para poder ir prev/next entre nombres
-    const allOpts = [...$('searchValueSelect').options]
-      .filter(o => o.value).map(o => o.value);
-    navList  = allOpts;
-    navIndex = allOpts.indexOf(val);
-    clearResultsPanel();
-    $('emptyState').style.display = 'none';
-    loadDevice(val);
-  } else {
-    navList = []; navIndex = -1;
-    executeSelectSearch(mode, val);
-  }
+$('searchValueInput').addEventListener('input', () => {
+  renderValueDropdown($('searchValueInput').value);
+});
+$('searchValueInput').addEventListener('focus', () => {
+  renderValueDropdown($('searchValueInput').value);
+});
+$('searchValueInput').addEventListener('blur', () => {
+  // Delay para permitir que el mousedown del ítem se procese antes de cerrar
+  setTimeout(closeValueDropdown, 120);
+});
+$('searchValueInput').addEventListener('keydown', e => {
+  if (e.key === 'Escape'){ closeValueDropdown(); $('searchValueInput').blur(); }
 });
 
 /* ════ Cargar dispositivo desde el Sheet ═════════════════════ */

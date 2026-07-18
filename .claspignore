@@ -1,0 +1,9 @@
+index.html
+sw.js
+manifest.json
+icon.svg
+html5-qrcode.min.js
+README.md
+.gitignore
+Code.gs
+node_modules/**
