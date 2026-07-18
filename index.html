@@ -891,9 +891,9 @@ html, body {
 
     <div class="search-sel-row">
       <select id="searchModeSelect" class="search-sel mode">
-        <option value="NOMBRE">Nombre</option>
+        <option value="NOMBRE">Dispositivo</option>
         <option value="CT">CT</option>
-        <option value="UBICACION">Ubicación</option>
+        <option value="UBICACION">Báculo/Rack</option>
       </select>
       <div class="search-wrap search-combo">
         <input id="searchValueInput" class="search-sel value" type="text" inputmode="search"
@@ -919,7 +919,7 @@ html, body {
     <!-- Estado vacío -->
     <div id="emptyState" class="empty-state">
       <div class="empty-icon">📷</div>
-      <div class="empty-txt" id="emptyTxt">Escribe el nombre (o parte de él) para buscar un dispositivo.</div>
+      <div class="empty-txt" id="emptyTxt">Escribe el nombre del dispositivo (o parte de él) para buscarlo.</div>
     </div>
 
     <!-- Ficha del dispositivo -->
@@ -1279,9 +1279,9 @@ function populateValueSelect(){
   }
 
   buildValueOptions();
-  input.placeholder = mode === 'NOMBRE' ? 'Escribe 2-3 letras del nombre…'
+  input.placeholder = mode === 'NOMBRE' ? 'Escribe 2-3 letras del dispositivo…'
     : mode === 'CT' ? 'Escribe 2-3 letras del CT…'
-    : 'Escribe 2-3 letras de la ubicación…';
+    : 'Escribe 2-3 letras del báculo/rack…';
   input.disabled = false;
 }
 
@@ -1410,7 +1410,7 @@ function executeSelectSearch(mode, val){
   });
 
   const n   = matched.length;
-  const col = mode === 'CT' ? 'CT' : 'Ubicación';
+  const col = mode === 'CT' ? 'CT' : 'Báculo/Rack';
   showResultsPanel(
     n + ' dispositivo' + (n !== 1 ? 's' : '') + ' en ' + groups.size + ' grupo' + (groups.size !== 1 ? 's' : ''),
     col + ': ' + val
@@ -1473,6 +1473,13 @@ const SKIP_IN_GRID = new Set(['NOMBRE','SERIAL','SERIAL NUMBER','FECHA','DATE','
 const TEXT_COLS = new Set(['MODELO','MODEL','UBICACION','UBICACIÓN','LOCATION','ZONA','ZONE','TIPO','TYPE','DEVICE TYPE','ESTADO','STATUS','COMMENTS','NOTAS']);
 // Columnas que ocupan ancho completo
 const FULL_COLS = new Set(['MODELO','MODEL','UBICACION','UBICACIÓN','LOCATION','NOTAS','COMMENTS','DESCRIPCION','DESCRIPCIÓN']);
+
+// Etiquetas de columnas mostradas al usuario (el dato sigue leyéndose/guardándose
+// en la columna real del Sheet — solo cambia cómo se rotula en la UI)
+const COL_LABELS = { 'UBICACION': 'BÁCULO/RACK', 'UBICACIÓN': 'BÁCULO/RACK', 'LOCATION': 'BÁCULO/RACK' };
+function displayLabel(h){
+  return COL_LABELS[h.toUpperCase().trim()] || h;
+}
 
 // Encuentra el nombre exacto del encabezado que corresponde al Estado
 function findEstadoHeader(headers){
@@ -1562,7 +1569,7 @@ function renderCard(nombre, record, headers, estadoOptions){
     cell.className = 'data-cell' + (FULL_COLS.has(upper) ? ' full' : '');
     const isText = TEXT_COLS.has(upper);
     cell.innerHTML =
-      '<div class="dc-key">' + h + '</div>' +
+      '<div class="dc-key">' + displayLabel(h) + '</div>' +
       '<div class="dc-val' + (isText ? ' text' : '') + (val ? '' : ' empty') + '">' +
         (val || '—') +
       '</div>';
