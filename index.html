@@ -696,6 +696,38 @@ html, body {
 }
 .type-bar-wrap { flex: 1; height: 6px; background: var(--paper2); border-radius: 3px; overflow: hidden; }
 .type-bar-fill  { height: 100%; background: var(--orange); border-radius: 3px; transition: width .4s; }
+
+/* ══ Resumen por Serial / MAC ═════════════════════════════════ */
+.sm-card {
+  background: var(--white); border: 1.5px solid var(--ink);
+  border-radius: 12px; padding: 14px 13px; margin-bottom: 12px;
+}
+.sm-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 10px; flex-wrap: wrap;
+}
+.sm-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 15px; font-weight: 700; text-transform: uppercase;
+}
+.sm-toggle { display: flex; gap: 6px; }
+.sm-toggle-btn {
+  padding: 5px 12px; border-radius: 20px;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 13px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  border: 1.5px solid var(--ink); background: transparent;
+  color: var(--ink); cursor: pointer; white-space: nowrap; transition: background .12s;
+}
+.sm-toggle-btn.active { background: var(--ink); color: var(--paper); }
+.sm-count { font-size: 12px; color: var(--gray); margin-bottom: 8px; }
+.sm-list { border-top: .5px solid var(--line); }
+.sm-subhdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 4px 4px; margin-top: 4px;
+  font-family: var(--mono); font-size: 11.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--blue3);
+}
+.sm-subhdr-count { color: var(--gray); font-weight: 600; }
 .type-count { font-size: 11px; color: var(--gray); white-space: nowrap; min-width: 44px; text-align: right; }
 
 /* ══ Configurar cámara ════════════════════════════════════════ */
@@ -1031,6 +1063,18 @@ html, body {
       </div>
     </div>
     <div id="typeBreakdown"></div>
+
+    <div class="sm-card">
+      <div class="sm-head">
+        <span class="sm-title">Serial / MAC registrados</span>
+        <div class="sm-toggle">
+          <button class="sm-toggle-btn active" id="smSerialBtn" data-col="SERIAL">Serial</button>
+          <button class="sm-toggle-btn" id="smMacBtn" data-col="MAC">MAC</button>
+        </div>
+      </div>
+      <div class="sm-count" id="smCount"></div>
+      <div class="sm-list" id="smList"></div>
+    </div>
 
     <div class="log-card">
       <div class="log-head">Registro de hoy</div>
@@ -1790,6 +1834,7 @@ function renderSummary(){
   $('progFill').style.width  = pct + '%';
 
   renderTypeBreakdown();
+  renderSerialMacSummary();
 
   const list = $('logList');
   if (!dayLog.length){
@@ -2069,6 +2114,100 @@ function renderTypeBreakdown() {
     <div class="type-card-head">Avance por tipo</div>${rows}
   </div>`;
 }
+
+/* ════ Resumen por Serial / MAC (agrupado por CT → Ubicación) ═ */
+let smCol = 'SERIAL';
+
+function renderSerialMacSummary(){
+  const countEl = $('smCount');
+  const listEl  = $('smList');
+  const map     = getDevicesMap();
+  const label   = smCol === 'SERIAL' ? 'Serial' : 'MAC';
+
+  if (!Object.keys(map).length){
+    countEl.textContent = '';
+    listEl.innerHTML = '<div class="dd-empty">Sincronizá los datos offline (⟳) para ver este resumen.</div>';
+    return;
+  }
+
+  // Encuentra el encabezado de columna (SERIAL/MAC) usando los headers de cada dispositivo,
+  // ya que cada entrada del caché offline trae su propia copia de headers.
+  const candidates = smCol === 'SERIAL' ? ['SERIAL', 'SERIAL NUMBER'] : ['MAC', 'MAC ADDRESS'];
+
+  const entries = [];
+  Object.values(map).forEach(dev => {
+    const headers = dev.headers || [];
+    const result  = dev.result  || {};
+    const colHeader = findHeaderKey(headers, candidates);
+    if (!colHeader) return;
+    const val = (result[colHeader] || '').toString().trim();
+    if (!val) return;
+
+    const nombreHeader = findHeaderKey(headers, ['NOMBRE', 'NAME']);
+    const ctHeader      = findHeaderKey(headers, ['CT']);
+    const ubiHeader      = findHeaderKey(headers, ['UBICACION', 'UBICACIÓN', 'LOCATION']);
+
+    entries.push({
+      nombre:    (nombreHeader && result[nombreHeader]) || '(sin nombre)',
+      ct:        (ctHeader && result[ctHeader])          || '—',
+      ubicacion: (ubiHeader && result[ubiHeader])          || '—',
+      valor:     val
+    });
+  });
+
+  countEl.textContent = entries.length + ' dispositivo' + (entries.length !== 1 ? 's' : '') +
+    ' con ' + label + ' registrado' + (entries.length !== 1 ? 's' : '');
+
+  if (!entries.length){
+    listEl.innerHTML = '<div class="dd-empty">Sin dispositivos con ' + label + ' registrado.</div>';
+    return;
+  }
+
+  // Agrupar: CT → Ubicación (BTV)
+  const ctGroups = new Map();
+  entries.forEach(e => {
+    if (!ctGroups.has(e.ct)) ctGroups.set(e.ct, new Map());
+    const ubiMap = ctGroups.get(e.ct);
+    if (!ubiMap.has(e.ubicacion)) ubiMap.set(e.ubicacion, []);
+    ubiMap.get(e.ubicacion).push(e);
+  });
+
+  const sortedCts = [...ctGroups.keys()].sort((a, b) => a.localeCompare(b, 'es'));
+  let html = '';
+  sortedCts.forEach(ct => {
+    const ubiMap   = ctGroups.get(ct);
+    const ctTotal  = [...ubiMap.values()].reduce((sum, arr) => sum + arr.length, 0);
+    html += '<div class="results-group-hdr"><span>' + ct + '</span>' +
+      '<span class="results-group-hdr-count">' + ctTotal + ' disp.</span></div>';
+
+    const sortedUbis = [...ubiMap.keys()].sort((a, b) => a.localeCompare(b, 'es'));
+    sortedUbis.forEach(ubi => {
+      const items = ubiMap.get(ubi).slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+      html += '<div class="sm-subhdr"><span>' + ubi + '</span>' +
+        '<span class="sm-subhdr-count">' + items.length + '</span></div>';
+      items.forEach(it => {
+        html += '<div class="results-item results-item--child">' +
+          '<span class="ri-main">' + it.nombre + '</span>' +
+          '<span class="ri-sub">' + it.valor + '</span>' +
+        '</div>';
+      });
+    });
+  });
+  listEl.innerHTML = html;
+}
+
+$('smSerialBtn').addEventListener('click', () => {
+  smCol = 'SERIAL';
+  $('smSerialBtn').classList.add('active');
+  $('smMacBtn').classList.remove('active');
+  renderSerialMacSummary();
+});
+$('smMacBtn').addEventListener('click', () => {
+  smCol = 'MAC';
+  $('smMacBtn').classList.add('active');
+  $('smSerialBtn').classList.remove('active');
+  renderSerialMacSummary();
+});
 
 /* ════ Service Worker (PWA) ═══════════════════════════════════ */
 if ('serviceWorker' in navigator) {
