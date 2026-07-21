@@ -1296,6 +1296,17 @@ function getModelo(nombre){
   return key ? (result[key] || '') : '';
 }
 
+// Verdadero si el Sheet ya tiene un Serial capturado para este dispositivo
+// (sin importar si se capturó hoy o en una sesión previa)
+function hasCapturedSerial(nombre){
+  const cached = getDeviceFromCache(nombre);
+  if (!cached || !cached.result) return false;
+  const serialHeader = findHeaderKey(cached.headers || [], ['SERIAL','SERIAL NUMBER']);
+  if (!serialHeader) return false;
+  const val = (cached.result[serialHeader] || '').toString().trim();
+  return !!val && !val.toUpperCase().includes('PENDING');
+}
+
 /* ── Normaliza texto para comparar sin acentos/mayúsculas ── */
 function normalizeTxt(s){
   return (s || '').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -1454,7 +1465,7 @@ function executeSelectSearch(mode, val){
     resultsList.appendChild(hdr);
 
     items.forEach(entry => {
-      const done   = dayLog.some(l => l.nombre === entry.name);
+      const done   = dayLog.some(l => l.nombre === entry.name) || hasCapturedSerial(entry.name);
       const modelo = getModelo(entry.name);
       const div    = document.createElement('div');
       div.className = 'results-item results-item--child';
