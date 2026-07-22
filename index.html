@@ -1307,6 +1307,34 @@ function hasCapturedSerial(nombre){
   return !!val && !val.toUpperCase().includes('PENDING');
 }
 
+// Actualiza campos puntuales del dispositivo en la caché local sin
+// pisar el resto de la entrada (headers, estadoOptions, etc.)
+function patchCachedDevice(nombre, resultPatch){
+  const map = getDevicesMap();
+  const key = nombre.trim().toLowerCase();
+  const entry = map[key];
+  if (!entry) return;
+  entry.result = { ...(entry.result || {}), ...resultPatch };
+  localStorage.setItem(KEYS.devicesMap, JSON.stringify(map));
+}
+
+// Actualiza en vivo el badge Listo/Pendiente de un ítem visible en el
+// listado agrupado (por CT o Báculo/Rack), sin recargar la lista
+function updateResultsListBadge(nombre, done){
+  const items = resultsList.querySelectorAll('.results-item--child');
+  for (const item of items){
+    if (item.dataset.name === nombre){
+      const badge = item.querySelector('.dd-badge');
+      if (badge){
+        badge.classList.toggle('done', done);
+        badge.classList.toggle('pend', !done);
+        badge.textContent = done ? '✓ Listo' : 'Pendiente';
+      }
+      break;
+    }
+  }
+}
+
 /* ── Normaliza texto para comparar sin acentos/mayúsculas ── */
 function normalizeTxt(s){
   return (s || '').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -1469,6 +1497,7 @@ function executeSelectSearch(mode, val){
       const modelo = getModelo(entry.name);
       const div    = document.createElement('div');
       div.className = 'results-item results-item--child';
+      div.dataset.name = entry.name;
       div.innerHTML =
         '<span class="ri-main">' + entry.name +
           (modelo ? ' <span class="ri-sub">· ' + modelo + '</span>' : '') +
@@ -1824,6 +1853,14 @@ $('saveBtn').addEventListener('click', async () => {
       if (current.estadoHeader && data.estado) current.data[current.estadoHeader] = data.estado;
       if (mac && current.macHeader) current.data[current.macHeader] = mac;
 
+      // Actualizar caché local de dispositivos y el listado visible (sin recargar)
+      const resultPatch = {};
+      if (current.serialHeader) resultPatch[current.serialHeader] = serial;
+      if (current.estadoHeader && data.estado) resultPatch[current.estadoHeader] = data.estado;
+      if (mac && current.macHeader) resultPatch[current.macHeader] = mac;
+      patchCachedDevice(nombre, resultPatch);
+      updateResultsListBadge(nombre, true);
+
       // Log diario
       const t = new Date().toLocaleTimeString('es', {hour:'2-digit', minute:'2-digit'});
       dayLog = dayLog.filter(l => l.nombre !== nombre);
@@ -1838,6 +1875,18 @@ $('saveBtn').addEventListener('click', async () => {
     const queued = { nombre, serial, tecnico, estado, rowIndex: current.rowIndex };
     if (mac) queued.mac = mac;
     addToPendingQueue(queued);
+
+    // Reflejar el cambio en pantalla igual que si hubiera guardado (se sincroniza después)
+    if (current.serialHeader) current.data[current.serialHeader] = serial;
+    if (current.estadoHeader && estado) current.data[current.estadoHeader] = estado;
+    if (mac && current.macHeader) current.data[current.macHeader] = mac;
+    const resultPatch = {};
+    if (current.serialHeader) resultPatch[current.serialHeader] = serial;
+    if (current.estadoHeader && estado) resultPatch[current.estadoHeader] = estado;
+    if (mac && current.macHeader) resultPatch[current.macHeader] = mac;
+    patchCachedDevice(nombre, resultPatch);
+    updateResultsListBadge(nombre, true);
+
     showToast('Sin red — guardado en cola local 📥', '');
   } finally {
     btn.classList.remove('saving');
