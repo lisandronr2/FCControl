@@ -1129,12 +1129,34 @@ function showToast(msg, type = ''){
    Utilidades genéricas usadas tanto por los resultados de búsqueda
    como por las tarjetas del Resumen. */
 
+// Detecta si corremos dentro de la app nativa (Capacitor) — ahí ni
+// window.print() ni la descarga de blobs por <a download> funcionan
+// porque el WebView embebido no los implementa.
+function isNativeApp(){
+  return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+}
+
 // Imprime (→ "Guardar como PDF") el título + HTML dado, sin importar
 // qué vista esté activa en pantalla.
-function printAsPDF(title, bodyHtml){
+async function printAsPDF(title, bodyHtml){
   const area = $('printExport');
   area.innerHTML = '<div class="print-title">' + title + '</div>' + bodyHtml;
   document.body.classList.add('print-mode');
+
+  const printerPlugin = isNativeApp() && window.Capacitor.Plugins && window.Capacitor.Plugins.AppPrinter;
+  if (printerPlugin){
+    // Deja que el navegador aplique el CSS @media print antes de capturar la vista
+    await new Promise(r => setTimeout(r, 80));
+    try {
+      await printerPlugin.printCurrent();
+    } catch(e){
+      showToast('No se pudo imprimir: ' + (e.message || e.errorMessage || 'error desconocido'), 'err');
+    }
+    document.body.classList.remove('print-mode');
+    area.innerHTML = '';
+    return;
+  }
+
   window.print();
 }
 window.addEventListener('afterprint', () => {
@@ -1143,14 +1165,29 @@ window.addEventListener('afterprint', () => {
 });
 
 // Descarga un archivo .csv (se abre directo en Excel). rows: array de arrays.
-function downloadCSV(filename, headers, rows){
+async function downloadCSV(filename, headers, rows){
   const esc = v => {
     const s = (v === null || v === undefined) ? '' : String(v);
     return /[",;\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   const lines = [headers, ...rows].map(r => r.map(esc).join(';'));
-  // BOM UTF-8 para que Excel muestre bien tildes/Ñ
-  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const csvText = '﻿' + lines.join('\r\n'); // BOM UTF-8 para que Excel muestre bien tildes/Ñ
+
+  const plugins = isNativeApp() && window.Capacitor.Plugins;
+  if (plugins && plugins.Filesystem && plugins.Share){
+    try {
+      await plugins.Filesystem.writeFile({
+        path: filename, data: csvText, directory: 'CACHE', encoding: 'utf8'
+      });
+      const uriResult = await plugins.Filesystem.getUri({ path: filename, directory: 'CACHE' });
+      await plugins.Share.share({ title: filename, url: uriResult.uri });
+    } catch(e){
+      showToast('No se pudo exportar: ' + (e.message || e.errorMessage || 'error desconocido'), 'err');
+    }
+    return;
+  }
+
+  const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href = url; a.download = filename;
