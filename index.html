@@ -1779,8 +1779,12 @@ const LAST_CAM_IP_KEY = 'fcc_last_cam_access_ip';
 // HikvisionCamera registrado — en el navegador normal esto es undefined
 // y la app se queda en el flujo asistido de copiar/pegar de siempre.
 function getHikPlugin(){
-  return (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
-    && window.Capacitor.Plugins && window.Capacitor.Plugins.HikvisionCamera) || null;
+  if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
+    && window.Capacitor.Plugins && window.Capacitor.Plugins.HikvisionCamera) {
+    return window.Capacitor.Plugins.HikvisionCamera;
+  }
+  if (window.ElectronHikvision) return window.ElectronHikvision;
+  return null;
 }
 
 $('camCfgBtn').addEventListener('click', openCamConfig);

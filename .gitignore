@@ -11,3 +11,6 @@ android/app/*.apk
 android/app/release/
 *.keystore
 *.jks
+
+# ── App escritorio (Electron) ──────────────────────────────────
+electron-dist/

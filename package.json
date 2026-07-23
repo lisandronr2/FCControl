@@ -2,11 +2,14 @@
   "name": "fccontrol-mobile",
   "version": "1.0.0",
   "private": true,
-  "description": "FCControl - wrapper nativo Android/iOS (Capacitor) para configuración asistida de cámaras Hikvision vía ISAPI",
+  "description": "FCControl - wrapper nativo Android/iOS (Capacitor) y Windows (Electron) para configuración asistida de cámaras Hikvision vía ISAPI",
+  "main": "electron/main.js",
   "scripts": {
     "sync:www": "node scripts/sync-www.js",
     "cap:sync": "npm run sync:www && npx cap sync",
-    "android:build": "npm run cap:sync && cd android && gradlew.bat assembleDebug"
+    "android:build": "npm run cap:sync && cd android && gradlew.bat assembleDebug",
+    "electron:dev": "electron .",
+    "electron:build": "electron-builder --win"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.2",
@@ -14,5 +17,27 @@
     "@capacitor/core": "^8.4.2",
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/share": "^8.0.1"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.solucionesmata.fccontrol",
+    "productName": "FCControl",
+    "directories": {
+      "output": "electron-dist"
+    },
+    "files": [
+      "electron/**/*",
+      "index.html",
+      "manifest.json",
+      "icon.svg",
+      "html5-qrcode.min.js",
+      "sw.js"
+    ],
+    "win": {
+      "target": ["nsis"]
+    }
   }
 }
