@@ -757,6 +757,24 @@ html, body {
 .copy-btn.wide { font-family: 'Barlow Condensed', sans-serif; font-size: 13px; font-weight: 700; text-transform: uppercase; padding: 9px 14px; }
 .copy-btn:active { background: var(--blue2); }
 .copy-btn.copied { background: var(--ok); }
+
+/* ══ Configurar cámara — modo automático (solo app nativa) ═══ */
+.camauto-section { margin-bottom: 14px; }
+.camauto-section.hidden { display: none; }
+.camauto-btn {
+  width: 100%; background: var(--orange); color: #fff; border: none;
+  border-radius: 10px; padding: 13px;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 16px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .03em; cursor: pointer;
+}
+.camauto-btn:active { background: var(--orange2); }
+.camauto-btn:disabled { background: #C4BEB4; cursor: wait; }
+.camauto-status {
+  font-size: 12px; color: var(--gray); margin-top: 8px; line-height: 1.5; display: none;
+}
+.camauto-status.busy, .camauto-status.ok, .camauto-status.err { display: block; }
+.camauto-status.ok  { color: var(--ok); font-weight: 600; }
+.camauto-status.err { color: var(--red); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -779,7 +797,12 @@ html, body {
       <div class="camcfg-title">Configurar cámara</div>
       <button id="camCfgClose" class="camcfg-close">✕</button>
     </div>
-    <div class="camcfg-warn">
+    <div id="camAutoSection" class="camauto-section hidden">
+      <button id="camAutoBtn" class="camauto-btn">⚡ Configurar automáticamente</button>
+      <div id="camAutoStatus" class="camauto-status"></div>
+    </div>
+
+    <div id="camManualWarn" class="camcfg-warn">
       ⚠ Esto <strong>no</strong> configura la cámara automáticamente. Conectá el teléfono a la red/WiFi de la cámara y usá estos datos en su panel web.
     </div>
 
@@ -1715,6 +1738,14 @@ function renderCard(nombre, record, headers, estadoOptions){
 const CAM_CREDS = { user: 'admin', pass: 'Elecnor2020ING!' };
 const LAST_CAM_IP_KEY = 'fcc_last_cam_access_ip';
 
+// Disponible solo dentro del wrapper nativo (Capacitor) con el plugin
+// HikvisionCamera registrado — en el navegador normal esto es undefined
+// y la app se queda en el flujo asistido de copiar/pegar de siempre.
+function getHikPlugin(){
+  return (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
+    && window.Capacitor.Plugins && window.Capacitor.Plugins.HikvisionCamera) || null;
+}
+
 $('camCfgBtn').addEventListener('click', openCamConfig);
 $('camCfgClose').addEventListener('click', closeCamConfig);
 $('camCfgModal').addEventListener('click', e => {
@@ -1742,6 +1773,16 @@ function openCamConfig(){
   $('camMacInput').value = macHeader ? (current.data[macHeader] || '') : '';
   $('camMacStep').style.display = macHeader ? '' : 'none';
 
+  // Mostrar el modo automático solo si corremos dentro de la app nativa
+  const hasAuto = !!getHikPlugin();
+  $('camAutoSection').classList.toggle('hidden', !hasAuto);
+  $('camManualWarn').innerHTML = hasAuto
+    ? '💡 Podés usar <strong>Configurar automáticamente</strong> arriba, o hacerlo a mano con los pasos de abajo si preferís.'
+    : '⚠ Esto <strong>no</strong> configura la cámara automáticamente. Conectá el teléfono a la red/WiFi de la cámara y usá estos datos en su panel web.';
+  $('camAutoStatus').className = 'camauto-status';
+  $('camAutoStatus').textContent = '';
+  $('camAutoBtn').disabled = false;
+
   $('camCfgModal').classList.remove('hidden');
 }
 
@@ -1754,6 +1795,68 @@ $('camOpenBtn').addEventListener('click', () => {
   if (!ip){ showToast('Escribí la IP de la cámara.', 'err'); return; }
   localStorage.setItem(LAST_CAM_IP_KEY, ip);
   window.open('http://' + ip + '/', '_blank');
+});
+
+$('camAutoBtn').addEventListener('click', async () => {
+  const plugin = getHikPlugin();
+  if (!plugin) return;
+
+  const accessIp    = $('camAccessIp').value.trim();
+  const targetIp    = $('camTargetIp').value.trim();
+  const targetMask  = $('camTargetMask').value.trim();
+  const targetGw    = $('camTargetGw').value.trim();
+
+  if (!accessIp){ showToast('Escribí la IP de acceso a la cámara.', 'err'); return; }
+  if (!targetIp || targetIp === '—' || !targetMask || targetMask === '—'){
+    showToast('El Sheet no tiene IP/máscara para este dispositivo.', 'err');
+    return;
+  }
+  localStorage.setItem(LAST_CAM_IP_KEY, accessIp);
+
+  const btn = $('camAutoBtn');
+  const status = $('camAutoStatus');
+  btn.disabled = true;
+  status.className = 'camauto-status busy';
+  status.textContent = 'Conectando con la cámara…';
+
+  try {
+    const secured = await plugin.readAndSecure({
+      accessIp,
+      newPass: CAM_CREDS.pass
+    });
+
+    status.textContent = (secured.activated ? 'Cámara activada. ' : 'Contraseña actualizada. ')
+      + 'MAC leída: ' + (secured.mac || '—') + ' — aplicando red…';
+
+    if (secured.mac && current.macHeader) $('camMacInput').value = secured.mac;
+
+    const applied = await plugin.applyNetwork({
+      accessIp,
+      targetIp,
+      targetMask,
+      targetGateway: (targetGw && targetGw !== '—') ? targetGw : ''
+    });
+
+    if (applied.ok){
+      status.className = 'camauto-status ok';
+      status.textContent = '✓ Cámara configurada — nueva IP: ' + targetIp
+        + (applied.probablySucceeded ? ' (la cámara cortó la conexión al cambiar, es normal)' : '');
+      showToast('✓ Cámara configurada automáticamente', 'ok');
+
+      if (secured.mac && current.macHeader){
+        const macResult = await saveMacToSheet(secured.mac);
+        if (!macResult.ok) showToast(macResult.error, 'err');
+      }
+    } else {
+      status.className = 'camauto-status err';
+      status.textContent = '✗ ' + (applied.message || 'No se pudo aplicar la configuración de red.');
+    }
+  } catch(err){
+    status.className = 'camauto-status err';
+    status.textContent = '✗ ' + (err.message || err.errorMessage || 'Error al comunicarse con la cámara.');
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 document.querySelectorAll('.copy-btn[data-copy]').forEach(btn => {
@@ -1773,11 +1876,10 @@ document.querySelectorAll('.copy-btn[data-copy]').forEach(btn => {
   });
 });
 
-$('camMacSave').addEventListener('click', async () => {
-  if (!current){ return; }
-  const mac = $('camMacInput').value.trim();
-  if (!mac){ showToast('Escribí la MAC antes de guardar.', 'err'); return; }
-  if (!current.macHeader){ showToast('El Sheet no tiene columna MAC.', 'err'); return; }
+async function saveMacToSheet(mac){
+  if (!current) return { ok: false, error: 'No hay dispositivo seleccionado.' };
+  if (!mac) return { ok: false, error: 'Escribí la MAC antes de guardar.' };
+  if (!current.macHeader) return { ok: false, error: 'El Sheet no tiene columna MAC.' };
 
   try {
     const res = await fetch(apiUrl, {
@@ -1793,13 +1895,20 @@ $('camMacSave').addEventListener('click', async () => {
     const data = await res.json();
     if (data.ok){
       current.data[current.macHeader] = mac;
-      showToast('✓ MAC guardada en el Sheet', 'ok');
-    } else {
-      showToast(data.error || 'No se pudo guardar la MAC.', 'err');
+      patchCachedDevice($('cardName').textContent, { [current.macHeader]: mac });
+      return { ok: true };
     }
+    return { ok: false, error: data.error || 'No se pudo guardar la MAC.' };
   } catch(e){
-    showToast('Sin red — no se pudo guardar la MAC.', 'err');
+    return { ok: false, error: 'Sin red — no se pudo guardar la MAC.' };
   }
+}
+
+$('camMacSave').addEventListener('click', async () => {
+  const mac = $('camMacInput').value.trim();
+  const result = await saveMacToSheet(mac);
+  if (result.ok) showToast('✓ MAC guardada en el Sheet', 'ok');
+  else showToast(result.error, 'err');
 });
 
 /* ════ Guardar serial en el Sheet ════════════════════════════ */

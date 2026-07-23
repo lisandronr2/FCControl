@@ -1,0 +1,16 @@
+{
+  "name": "fccontrol-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FCControl - wrapper nativo Android/iOS (Capacitor) para configuración asistida de cámaras Hikvision vía ISAPI",
+  "scripts": {
+    "sync:www": "node scripts/sync-www.js",
+    "cap:sync": "npm run sync:www && npx cap sync",
+    "android:build": "npm run cap:sync && cd android && gradlew.bat assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/cli": "^8.4.2",
+    "@capacitor/core": "^8.4.2"
+  }
+}

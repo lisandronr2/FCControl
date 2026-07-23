@@ -1,1 +1,13 @@
 .claude/
+
+# ── App móvil (Capacitor) ──────────────────────────────────────
+node_modules/
+www/
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/app/*.apk
+android/app/release/
+*.keystore
+*.jks

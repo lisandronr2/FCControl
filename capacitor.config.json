@@ -1,0 +1,8 @@
+{
+  "appId": "com.solucionesmata.fccontrol",
+  "appName": "FCControl",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  }
+}

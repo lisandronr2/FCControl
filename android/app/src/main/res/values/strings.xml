@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">FCControl</string>
+    <string name="title_activity_main">FCControl</string>
+    <string name="package_name">com.solucionesmata.fccontrol</string>
+    <string name="custom_url_scheme">com.solucionesmata.fccontrol</string>
+</resources>
