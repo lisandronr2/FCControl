@@ -2223,6 +2223,13 @@ $('syncBtn').addEventListener('click', syncAllDevices);
 /* ════ Scanner de código de barras / QR (iOS + Android) ══════ */
 let scanner = null;
 
+// Quita el identificador de simbología AIM (ISO/IEC 15424) que algunos
+// escáneres anteponen al texto decodificado, ej. "]C1SN123456" → "SN123456".
+// ]C1=Code128, ]E0=EAN, ]Q0=QR, ]I0=Interleaved 2/5, etc.
+function stripAimPrefix(text){
+  return text.replace(/^\][A-Za-z]\d/, '');
+}
+
 $('scanBtn').addEventListener('click', startScanner);
 $('scanCancel').addEventListener('click', stopScanner);
 
@@ -2238,7 +2245,7 @@ async function startScanner() {
       { facingMode: 'environment' },
       { fps: 15, aspectRatio: 1.0 },
       (decodedText) => {
-        $('fSerial').value = decodedText.trim();
+        $('fSerial').value = stripAimPrefix(decodedText.trim());
         $('fSerial').classList.remove('err');
         $('serialErr').classList.remove('show');
         showToast('✓ Código escaneado', 'ok');
