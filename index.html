@@ -1206,11 +1206,25 @@ window.addEventListener('online',  () => { setStatus(true); syncPendingQueue(); 
 window.addEventListener('offline', () => { setStatus(false); updateOfflineBar(); });
 setStatus(navigator.onLine);
 
+/* ════ fetch con timeout ════════════════════════════════════════
+   Sin esto, si la red queda en un estado raro (pasa en el WebView
+   de Android) el fetch puede quedar esperando para siempre y la
+   app se ve "colgada" en vez de caer al modo offline. */
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /* ════ Carga de nombres desde el Sheet ════════════════════════ */
 async function loadNames(){
   if (!apiUrl) return;
   try {
-    const res  = await fetch(apiUrl + '?action=list');
+    const res  = await fetchWithTimeout(apiUrl + '?action=list');
     const data = await res.json();
     if (data.error) { showToast(data.error, 'err'); return; }
     names = data.names || [];
@@ -1615,7 +1629,7 @@ $('searchValueInput').addEventListener('keydown', e => {
 async function loadDevice(nombre){
   showToast('Cargando…');
   try {
-    const res  = await fetch(apiUrl + '?action=get&nombre=' + encodeURIComponent(nombre));
+    const res  = await fetchWithTimeout(apiUrl + '?action=get&nombre=' + encodeURIComponent(nombre));
     const data = await res.json();
     if (data.error)   { showToast(data.error, 'err'); return; }
     if (!data.result) { showToast('Dispositivo no encontrado en el Sheet.', 'err'); return; }
@@ -1923,7 +1937,7 @@ async function saveMacToSheet(mac){
   if (!current.macHeader) return { ok: false, error: 'El Sheet no tiene columna MAC.' };
 
   try {
-    const res = await fetch(apiUrl, {
+    const res = await fetchWithTimeout(apiUrl, {
       method:  'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body:    JSON.stringify({
@@ -1983,7 +1997,7 @@ $('saveBtn').addEventListener('click', async () => {
   if (mac) payload.mac = mac;
 
   try {
-    const res  = await fetch(apiUrl, {
+    const res  = await fetchWithTimeout(apiUrl, {
       method:  'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body:    JSON.stringify(payload)
@@ -2147,7 +2161,7 @@ async function syncAllDevices() {
   btn.classList.add('syncing');
   showToast('Descargando datos para uso offline…');
   try {
-    const res  = await fetch(apiUrl + '?action=all');
+    const res  = await fetchWithTimeout(apiUrl + '?action=all');
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Error en el servidor');
 
@@ -2220,7 +2234,7 @@ async function startScanner() {
   $('scanModal').classList.remove('hidden');
   try {
     scanner = new Html5Qrcode('scanRegion', { verbose: false });
-    await scanner.start(
+    const startPromise = scanner.start(
       { facingMode: 'environment' },
       { fps: 15, aspectRatio: 1.0 },
       (decodedText) => {
@@ -2232,9 +2246,18 @@ async function startScanner() {
       },
       () => {}
     );
+    // Si el permiso de cámara nunca se resuelve (ej. permiso no declarado
+    // a nivel del sistema), esto evita que la app quede colgada esperando
+    // para siempre con el modal tapando la pantalla.
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Timeout esperando la cámara')), 12000)
+    );
+    await Promise.race([startPromise, timeout]);
   } catch(e) {
     const msg = String(e.message || e);
-    if (msg.includes('NotAllowed') || msg.includes('Permission') || msg.includes('denied')) {
+    if (msg.includes('Timeout')) {
+      showToast('La cámara no respondió — revisá el permiso de cámara en Ajustes de la app.', 'err');
+    } else if (msg.includes('NotAllowed') || msg.includes('Permission') || msg.includes('denied')) {
       showToast('Permiso de cámara denegado — habilitalo en ajustes del navegador.', 'err');
     } else if (msg.includes('NotFound') || msg.includes('Requested device not found')) {
       showToast('No se encontró cámara en este dispositivo.', 'err');
@@ -2291,7 +2314,7 @@ async function syncPendingQueue() {
   for (const item of q) {
     try {
       const { queuedAt, ...payload } = item;
-      const res  = await fetch(apiUrl, {
+      const res  = await fetchWithTimeout(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
