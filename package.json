@@ -47,7 +47,9 @@
       {
         "provider": "github",
         "owner": "lisandronr2",
-        "repo": "FCControl"
+        "repo": "FCControl",
+        "releaseType": "release",
+        "draft": false
       }
     ]
   }
