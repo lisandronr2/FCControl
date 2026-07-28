@@ -39,7 +39,7 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Requeridos para atar las llamadas ISAPI a la red WiFi de la cámara
+    <!-- Requeridos para atar las llamadas ISAPI a la red (cable Ethernet o WiFi) de la cámara
          (que suele no tener salida a internet) en vez de a los datos móviles -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />

@@ -26,11 +26,14 @@ class HikvisionCameraPlugin : Plugin() {
     private data class Session(val client: HikvisionIsapiClient, val user: String, val pass: String, val interfaceId: String)
     private val sessions = mutableMapOf<String, Session>()
 
-    private fun activeWifiNetwork(): Network? {
+    // Las cámaras se configuran por red cableada (Ethernet vía adaptador
+    // USB-C) o WiFi según el equipo — no asumimos una sola.
+    private fun activeLocalNetwork(): Network? {
         val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         return cm.allNetworks.firstOrNull { net ->
             val caps = cm.getNetworkCapabilities(net)
-            caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+            caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
         }
     }
 
@@ -41,12 +44,13 @@ class HikvisionCameraPlugin : Plugin() {
         val currentPass = call.getString("currentPass") ?: "12345"
         val newPass = call.getString("newPass") ?: return call.reject("Falta newPass")
 
-        val network = activeWifiNetwork()
-            ?: return call.reject("No hay WiFi conectada. Conectá el teléfono a la red de la cámara.")
+        val network = activeLocalNetwork()
+            ?: return call.reject("Sin conexión a la red de la cámara. Conectá el cable o el WiFi a la red donde está la cámara.")
 
         Thread {
             try {
-                val client = HikvisionIsapiClient(network, "http://$accessIp")
+                val baseUrl = HikvisionIsapiClient.detectProtocol(network, accessIp)
+                val client = HikvisionIsapiClient(network, baseUrl)
 
                 // 1) Intentar activación (cámara de fábrica, nunca configurada)
                 val activateBody = """<?xml version="1.0" encoding="UTF-8"?>

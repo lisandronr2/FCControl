@@ -1,12 +1,13 @@
-// Cliente ISAPI para cámaras Hikvision — corre en el proceso principal de
-// Electron (Node puro), sin las restricciones de un navegador: acá no hay
-// contenido mixto ni CORS, así que hablar HTTP plano con la cámara es
-// directo. Es el equivalente de escritorio del plugin nativo de Android
-// (HikvisionCameraPlugin.kt / HikvisionIsapiClient.kt / DigestAuth.kt) —
-// misma lógica, mismo flujo de activación/login, mismo manejo del
-// "corte esperado" al cambiar de IP.
+// Cliente ISAPI para cámaras Hikvision/HikMicro — corre en el proceso
+// principal de Electron (Node puro), sin las restricciones de un
+// navegador: acá no hay contenido mixto ni CORS, así que hablar HTTP/HTTPS
+// con la cámara es directo. Es el equivalente de escritorio del plugin
+// nativo de Android (HikvisionCameraPlugin.kt / HikvisionIsapiClient.kt /
+// DigestAuth.kt) — misma lógica, mismo flujo de activación/login, mismo
+// manejo del "corte esperado" al cambiar de IP.
 
 const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
 
 function md5(input) {
@@ -61,28 +62,25 @@ function describeIsapiError(resp) {
   return parts.join(' · ');
 }
 
-function rawRequest(baseUrl, method, path, headers, body, timeoutMs = 8000) {
+function rawRequest(protocol, hostname, port, method, path, headers, body, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
-    const url = new URL(path, baseUrl);
-    const req = http.request(
-      {
-        hostname: url.hostname,
-        port: url.port || 80,
-        path: url.pathname + url.search,
-        method,
-        headers: {
-          Accept: 'application/xml',
-          ...(body ? { 'Content-Type': 'application/xml', 'Content-Length': Buffer.byteLength(body) } : {}),
-          ...headers
-        },
-        timeout: timeoutMs
+    const lib = protocol === 'https:' ? https : http;
+    const options = {
+      hostname, port, path, method,
+      headers: {
+        Accept: 'application/xml',
+        ...(body ? { 'Content-Type': 'application/xml', 'Content-Length': Buffer.byteLength(body) } : {}),
+        ...headers
       },
-      res => {
-        let data = '';
-        res.on('data', chunk => (data += chunk));
-        res.on('end', () => resolve({ code: res.statusCode, body: data, headers: res.headers }));
-      }
-    );
+      timeout: timeoutMs
+    };
+    if (protocol === 'https:') options.rejectUnauthorized = false; // certificado autofirmado propio de la cámara
+
+    const req = lib.request(options, res => {
+      let data = '';
+      res.on('data', chunk => (data += chunk));
+      res.on('end', () => resolve({ code: res.statusCode, body: data, headers: res.headers }));
+    });
     req.on('timeout', () => { req.destroy(new Error('timeout')); });
     req.on('error', reject);
     if (body) req.write(body);
@@ -90,12 +88,28 @@ function rawRequest(baseUrl, method, path, headers, body, timeoutMs = 8000) {
   });
 }
 
-async function requestNoAuth(baseUrl, method, path, body) {
-  return rawRequest(baseUrl, method, path, {}, body);
+// Sondeo liviano para decidir si la cámara habla HTTPS (443, certificado
+// autofirmado) o HTTP (80) plano. Varios firmwares Hikvision/HikMicro
+// recientes exigen HTTPS específicamente para /ISAPI/Security/activate y
+// devuelven un rechazo genérico ("Invalid Operation") si se los llama por
+// HTTP — de ahí que convenga fijar el protocolo una sola vez por sesión.
+async function detectProtocol(accessIp, timeoutMs = 4000) {
+  try {
+    await rawRequest('https:', accessIp, 443, 'GET', '/ISAPI/System/deviceInfo', {}, null, timeoutMs);
+    return 'https:';
+  } catch (e) {
+    return 'http:';
+  }
 }
 
-async function requestAuth(baseUrl, method, path, user, pass, body) {
-  const probe = await rawRequest(baseUrl, method, path, {}, body);
+async function requestNoAuth(protocol, accessIp, method, path, body) {
+  const port = protocol === 'https:' ? 443 : 80;
+  return rawRequest(protocol, accessIp, port, method, path, {}, body);
+}
+
+async function requestAuth(protocol, accessIp, method, path, user, pass, body) {
+  const port = protocol === 'https:' ? 443 : 80;
+  const probe = await rawRequest(protocol, accessIp, port, method, path, {}, body);
   if (probe.code !== 401) return probe;
 
   const wwwAuth = probe.headers['www-authenticate'];
@@ -103,7 +117,7 @@ async function requestAuth(baseUrl, method, path, user, pass, body) {
   if (!challenge) return probe;
 
   const authHeader = buildAuthorizationHeader(challenge, method, path, user, pass);
-  return rawRequest(baseUrl, method, path, { Authorization: authHeader }, body);
+  return rawRequest(protocol, accessIp, port, method, path, { Authorization: authHeader }, body);
 }
 
 function escapeXml(s) {
@@ -118,13 +132,15 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
   if (!accessIp) throw new Error('Falta accessIp');
   if (!newPass) throw new Error('Falta newPass');
 
-  const baseUrl = `http://${accessIp}`;
+  const protocol = await detectProtocol(accessIp);
+  console.log(`[hikvision] ${accessIp}: usando ${protocol}`);
 
   const activateBody = `<?xml version="1.0" encoding="UTF-8"?>
 <ActivationInfo xmlns="http://www.hikvision.com/ver20/XMLSchema">
 <Password>${escapeXml(newPass)}</Password>
 </ActivationInfo>`;
-  const activateResp = await requestNoAuth(baseUrl, 'POST', '/ISAPI/Security/activate', activateBody);
+  const activateResp = await requestNoAuth(protocol, accessIp, 'POST', '/ISAPI/Security/activate', activateBody);
+  console.log('[hikvision] activate:', activateResp.code, activateResp.body);
 
   let effectiveUser = 'admin';
   let effectivePass;
@@ -142,7 +158,8 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
 <userName>${currentUser}</userName>
 <password>${escapeXml(newPass)}</password>
 </User>`;
-    const pwResp = await requestAuth(baseUrl, 'PUT', '/ISAPI/Security/users/1', currentUser, currentPass, userBody);
+    const pwResp = await requestAuth(protocol, accessIp, 'PUT', '/ISAPI/Security/users/1', currentUser, currentPass, userBody);
+    console.log('[hikvision] change-password:', pwResp.code, pwResp.body);
     if (pwResp.code < 200 || pwResp.code >= 300) {
       throw new Error(
         `Cambio de contraseña rechazado (${describeIsapiError(pwResp)}). ` +
@@ -152,7 +169,7 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
     effectivePass = newPass;
   }
 
-  const netResp = await requestAuth(baseUrl, 'GET', '/ISAPI/System/Network/interfaces', effectiveUser, effectivePass);
+  const netResp = await requestAuth(protocol, accessIp, 'GET', '/ISAPI/System/Network/interfaces', effectiveUser, effectivePass);
   if (netResp.code < 200 || netResp.code >= 300) {
     throw new Error(`No se pudo leer la configuración de red (${describeIsapiError(netResp)}).`);
   }
@@ -162,7 +179,7 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
   const currentMask = xmlTagValue(netResp.body, 'subnetMask') || '';
   const interfaceId = xmlTagValue(netResp.body, 'id') || '1';
 
-  sessions.set(accessIp, { baseUrl, user: effectiveUser, pass: effectivePass, interfaceId });
+  sessions.set(accessIp, { protocol, user: effectiveUser, pass: effectivePass, interfaceId });
 
   return { ok: true, activated, mac, currentIp, currentMask, interfaceId };
 }
@@ -190,7 +207,7 @@ ${gwXml}
 
   const path = `/ISAPI/System/Network/interfaces/${session.interfaceId}`;
   try {
-    const resp = await requestAuth(session.baseUrl, 'PUT', path, session.user, session.pass, body);
+    const resp = await requestAuth(session.protocol, accessIp, 'PUT', path, session.user, session.pass, body);
     sessions.delete(accessIp); // la IP cambió: la sesión ya no es válida a esta dirección
 
     if (resp.code >= 200 && resp.code < 300) {
