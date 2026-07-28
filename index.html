@@ -1881,12 +1881,15 @@ $('camAutoBtn').addEventListener('click', async () => {
     });
 
     status.textContent = (secured.activated ? 'Cámara activada. ' : 'Contraseña actualizada. ')
-      + 'MAC leída: ' + (secured.mac || '—') + ' — aplicando red…';
+      + 'MAC leída: ' + (secured.mac || '—') + ' — poniendo nombre en OSD…';
 
     if (secured.mac && current.macHeader) $('camMacInput').value = secured.mac;
 
+    const deviceName = $('cardName').textContent.trim();
+
     const applied = await plugin.applyNetwork({
       accessIp,
+      deviceName,
       targetIp,
       targetMask,
       targetGateway: (targetGw && targetGw !== '—') ? targetGw : ''

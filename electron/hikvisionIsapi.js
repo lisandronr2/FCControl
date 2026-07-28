@@ -131,6 +131,102 @@ async function navigateAndWaitForPortal(win, accessIp, path) {
   }
 }
 
+async function clickNext(win) {
+  await exec(win, `(function(){ const btn = ${findButtonByTextJs('Siguiente')}; if (btn) btn.click(); })()`);
+  await new Promise(r => setTimeout(r, 1200));
+}
+
+// Pone el nombre OSD (superpuesto en la imagen) de la cámara para que
+// coincida con el nombre del dispositivo en FCControl. Esto se hace ANTES
+// de tocar la red (el técnico pidió ese orden explícitamente) recorriendo
+// el asistente desde el paso 1 sin modificar nada hasta llegar al paso de
+// OSD — así no se pisa ningún valor de red al pasar por ese paso.
+//
+// No tenemos visibilidad de la pantalla real de "Ajustes OSD" (no se pudo
+// probar contra hardware al escribir esto), así que la detección de campos
+// es defensiva: si no encuentra con certeza razonable qué escribir, falla
+// con un mensaje de diagnóstico en vez de arriesgarse a escribir en el
+// campo equivocado.
+async function setOsdName(win, accessIp, deviceName) {
+  await navigateAndWaitForPortal(win, accessIp, '/doc/index.html#/wizard');
+  const onWizard = await waitFor(win, `document.querySelector('.el-form-item') != null`, 6000);
+  if (!onWizard) throw new Error('No se pudo llegar al asistente para configurar el nombre OSD.');
+
+  // Pasos 1 (red) y 2 (hora): avanzar sin tocar nada, para llegar al 3 (OSD)
+  await clickNext(win);
+  await clickNext(win);
+
+  const onOsdStep = await waitFor(win, `
+    document.body.textContent.toUpperCase().includes('OSD') ||
+    document.body.textContent.toUpperCase().includes('SUPERPOSICI')
+  `, 5000);
+  if (!onOsdStep) {
+    const diag = await exec(win, `JSON.stringify({url: location.href, bodySnippet: document.body.textContent.slice(0,300)})`).catch(() => '{}');
+    throw new Error(`No se llegó a la pantalla de Ajustes OSD del asistente (${diag}).`);
+  }
+
+  // ¿Cámara de dos canales? Buscamos pestañas/selectores con "1"/"2" o
+  // "Canal 1"/"Canal 2"/"CH1"/"CH2" cerca de los campos de nombre.
+  const channelTabsInfo = await exec(win, `
+    (function(){
+      const tabs = Array.from(document.querySelectorAll('.el-tabs__item, .el-radio, [role=tab]'));
+      const chTabs = tabs.filter(t => /^(canal\\s*)?[12]$|^ch\\s*[12]$/i.test(t.textContent.trim()));
+      return chTabs.length;
+    })()
+  `);
+
+  const setNameOnCurrentPanel = async (name) => {
+    return exec(win, `
+      (function(){
+        function setVal(el, val) {
+          if (!el) return false;
+          const proto = Object.getPrototypeOf(el);
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+          setter.call(el, val);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        const items = Array.from(document.querySelectorAll('.el-form-item'));
+        const item = items.find(it => {
+          const lbl = it.querySelector('label');
+          if (!lbl) return false;
+          const t = lbl.textContent.toUpperCase();
+          return t.includes('NOMBRE') || t.includes('OSD') || t.includes('CANAL');
+        });
+        const input = item ? item.querySelector('input[type=text]') : null;
+        return setVal(input, ${JSON.stringify(name)});
+      })()
+    `);
+  };
+
+  if (channelTabsInfo >= 2) {
+    for (let ch = 1; ch <= 2; ch++) {
+      const clicked = await exec(win, `
+        (function(){
+          const tabs = Array.from(document.querySelectorAll('.el-tabs__item, .el-radio, [role=tab]'));
+          const tab = tabs.find(t => new RegExp('^(canal\\\\s*)?${ch}$|^ch\\\\s*${ch}$', 'i').test(t.textContent.trim()));
+          if (tab) { tab.click(); return true; }
+          return false;
+        })()
+      `);
+      if (!clicked) throw new Error(`No se encontró la pestaña del canal ${ch} en Ajustes OSD.`);
+      await new Promise(r => setTimeout(r, 500));
+      const set = await setNameOnCurrentPanel(`${deviceName} 0${ch}`);
+      if (!set) throw new Error(`No se encontró el campo de nombre OSD para el canal ${ch}.`);
+    }
+  } else {
+    const set = await setNameOnCurrentPanel(deviceName);
+    if (!set) {
+      const diag = await exec(win, `JSON.stringify(Array.from(document.querySelectorAll('.el-form-item label')).map(l => l.textContent.trim()))`).catch(() => '[]');
+      throw new Error(`No se encontró el campo de nombre OSD. Etiquetas visibles en esta pantalla: ${diag}`);
+    }
+  }
+
+  await new Promise(r => setTimeout(r, 300));
+  await clickNext(win);
+}
+
 async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '12345', newPass }) {
   if (!accessIp) throw new Error('Falta accessIp');
   if (!newPass) throw new Error('Falta newPass');
@@ -188,12 +284,21 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
   }
 }
 
-async function applyNetwork({ accessIp, targetIp, targetMask, targetGateway }) {
+async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, targetGateway }) {
   const session = sessions.get(accessIp);
   if (!session) throw new Error('Primero ejecutá el paso de credenciales (readAndSecure) para esta cámara.');
   const { win } = session;
 
   try {
+    // Primero el nombre OSD (pedido explícito: antes de tocar la red),
+    // recorriendo el asistente entero desde el paso 1 sin modificarlo.
+    if (deviceName) {
+      await setOsdName(win, accessIp, deviceName);
+    }
+
+    // Segunda pasada por el asistente, esta vez para la red — se navega de
+    // nuevo desde el paso 1 porque el asistente es lineal y no se puede
+    // volver atrás desde el paso de OSD.
     await navigateAndWaitForPortal(win, accessIp, '/doc/index.html#/wizard');
     const onWizard = await waitFor(win, `document.querySelector('.el-form-item') != null`, 6000);
     if (!onWizard) throw new Error('No se pudo llegar a la pantalla de ajustes de red del asistente.');
