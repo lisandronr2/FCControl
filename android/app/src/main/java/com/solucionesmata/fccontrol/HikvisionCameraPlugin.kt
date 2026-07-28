@@ -54,7 +54,7 @@ class HikvisionCameraPlugin : Plugin() {
 
                 // 1) Intentar activación (cámara de fábrica, nunca configurada)
                 val activateBody = """<?xml version="1.0" encoding="UTF-8"?>
-                    |<ActivationInfo xmlns="http://www.hikvision.com/ver20/XMLSchema">
+                    |<ActivationInfo xmlns="http://www.isapi.org/ver20/XMLSchema">
                     |<Password>${escapeXml(newPass)}</Password>
                     |</ActivationInfo>""".trimMargin()
                 val activateResp = client.requestNoAuth("POST", "/ISAPI/Security/activate", activateBody)
@@ -71,7 +71,7 @@ class HikvisionCameraPlugin : Plugin() {
                     activated = false
                     val activateDetail = HikvisionIsapiClient.describeIsapiError(activateResp)
                     val userBody = """<?xml version="1.0" encoding="UTF-8"?>
-                        |<User xmlns="http://www.hikvision.com/ver20/XMLSchema">
+                        |<User xmlns="http://www.isapi.org/ver20/XMLSchema">
                         |<id>1</id>
                         |<userName>$currentUser</userName>
                         |<password>${escapeXml(newPass)}</password>
@@ -133,7 +133,7 @@ class HikvisionCameraPlugin : Plugin() {
                     "<DefaultGateway><ipAddress>${escapeXml(targetGateway)}</ipAddress></DefaultGateway>" else ""
 
                 val body = """<?xml version="1.0" encoding="UTF-8"?>
-                    |<NetworkInterface xmlns="http://www.hikvision.com/ver20/XMLSchema">
+                    |<NetworkInterface xmlns="http://www.isapi.org/ver20/XMLSchema">
                     |<id>${session.interfaceId}</id>
                     |<IPAddress>
                     |<ipVersion>v4</ipVersion>

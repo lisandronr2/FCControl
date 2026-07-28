@@ -136,7 +136,7 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
   console.log(`[hikvision] ${accessIp}: usando ${protocol}`);
 
   const activateBody = `<?xml version="1.0" encoding="UTF-8"?>
-<ActivationInfo xmlns="http://www.hikvision.com/ver20/XMLSchema">
+<ActivationInfo xmlns="http://www.isapi.org/ver20/XMLSchema">
 <Password>${escapeXml(newPass)}</Password>
 </ActivationInfo>`;
   const activateResp = await requestNoAuth(protocol, accessIp, 'POST', '/ISAPI/Security/activate', activateBody);
@@ -153,7 +153,7 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
     activated = false;
     const activateDetail = describeIsapiError(activateResp);
     const userBody = `<?xml version="1.0" encoding="UTF-8"?>
-<User xmlns="http://www.hikvision.com/ver20/XMLSchema">
+<User xmlns="http://www.isapi.org/ver20/XMLSchema">
 <id>1</id>
 <userName>${currentUser}</userName>
 <password>${escapeXml(newPass)}</password>
@@ -194,7 +194,7 @@ async function applyNetwork({ accessIp, targetIp, targetMask, targetGateway }) {
     ? `<DefaultGateway><ipAddress>${escapeXml(targetGateway)}</ipAddress></DefaultGateway>` : '';
 
   const body = `<?xml version="1.0" encoding="UTF-8"?>
-<NetworkInterface xmlns="http://www.hikvision.com/ver20/XMLSchema">
+<NetworkInterface xmlns="http://www.isapi.org/ver20/XMLSchema">
 <id>${session.interfaceId}</id>
 <IPAddress>
 <ipVersion>v4</ipVersion>
