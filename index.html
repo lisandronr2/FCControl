@@ -1787,7 +1787,6 @@ function renderCard(nombre, record, headers, estadoOptions){
    Este modal arma los datos y abre el panel nativo de la cámara
    para que el técnico los pegue manualmente. ═══════════════════ */
 const CAM_CREDS = { user: 'admin', pass: 'Elecnor2026ING' };
-const LAST_CAM_IP_KEY = 'fcc_last_cam_access_ip';
 
 // Disponible solo dentro del wrapper nativo (Capacitor) con el plugin
 // HikvisionCamera registrado — en el navegador normal esto es undefined
@@ -1822,7 +1821,10 @@ function openCamConfig(){
   $('camUser').value = CAM_CREDS.user;
   $('camPass').value = CAM_CREDS.pass;
 
-  $('camAccessIp').value = localStorage.getItem(LAST_CAM_IP_KEY) || '192.168.1.64';
+  // Siempre arranca en la IP de fábrica: si se recordara la última IP usada
+  // con éxito, un técnico que resetea la cámara entre pruebas terminaría
+  // apuntando a una dirección vieja que ya no responde (pasó en la práctica).
+  $('camAccessIp').value = '192.168.1.64';
 
   current.macHeader = macHeader || null;
   $('camMacInput').value = macHeader ? (current.data[macHeader] || '') : '';
@@ -1848,7 +1850,6 @@ function closeCamConfig(){
 $('camOpenBtn').addEventListener('click', () => {
   const ip = $('camAccessIp').value.trim();
   if (!ip){ showToast('Escribí la IP de la cámara.', 'err'); return; }
-  localStorage.setItem(LAST_CAM_IP_KEY, ip);
   window.open('http://' + ip + '/', '_blank');
 });
 
@@ -1866,7 +1867,6 @@ $('camAutoBtn').addEventListener('click', async () => {
     showToast('El Sheet no tiene IP/máscara para este dispositivo.', 'err');
     return;
   }
-  localStorage.setItem(LAST_CAM_IP_KEY, accessIp);
 
   const btn = $('camAutoBtn');
   const status = $('camAutoStatus');

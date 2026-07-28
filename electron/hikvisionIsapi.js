@@ -113,6 +113,24 @@ async function activate(win, newPass) {
   return true;
 }
 
+// Navega y espera activamente a que el panel Vue de la cámara termine de
+// montar (no un sleep fijo: en cámaras lentas 1.5s no alcanza), o lanza un
+// error específico y accionable en vez de dejar que el flujo siga a ciegas
+// y termine confundiendo "la página no cargó" con "contraseña incorrecta".
+async function navigateAndWaitForPortal(win, accessIp, path) {
+  try {
+    await win.loadURL(`http://${accessIp}${path}`);
+  } catch (e) {
+    throw new Error(`No se pudo conectar con la cámara en ${accessIp} (${e.message}). Verificá la IP y que el teléfono/PC esté en la misma red.`);
+  }
+
+  const loaded = await waitFor(win, `document.querySelectorAll('input').length > 0`, 8000, 400);
+  if (!loaded) {
+    const diag = await exec(win, `JSON.stringify({url: location.href, title: document.title, bodyLen: document.body ? document.body.innerHTML.length : 0})`).catch(() => '{}');
+    throw new Error(`La cámara respondió en ${accessIp} pero el panel no terminó de cargar (${diag}). Probá de nuevo o revisá la IP de acceso.`);
+  }
+}
+
 async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '12345', newPass }) {
   if (!accessIp) throw new Error('Falta accessIp');
   if (!newPass) throw new Error('Falta newPass');
@@ -121,8 +139,7 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
   win.setMenuBarVisibility(false);
 
   try {
-    await win.loadURL(`http://${accessIp}/doc/index.html#/portal/login`);
-    await new Promise(r => setTimeout(r, 1500));
+    await navigateAndWaitForPortal(win, accessIp, '/doc/index.html#/portal/login');
 
     // ¿Pantalla de activación de fábrica (dos campos de contraseña) o login normal?
     const isActivationScreen = await exec(win, `document.querySelectorAll('input[type=password]').length >= 2`);
@@ -135,9 +152,9 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
       // Tras activar, algunos firmwares loguean automático; si no, probamos login explícito
       const stillNeedsLogin = await exec(win, `location.hash.includes('/login') || document.querySelectorAll('input[type=password]').length >= 2`);
       if (stillNeedsLogin) {
-        await win.loadURL(`http://${accessIp}/doc/index.html#/portal/login`);
-        await new Promise(r => setTimeout(r, 1500));
-        await login(win, 'admin', newPass);
+        await navigateAndWaitForPortal(win, accessIp, '/doc/index.html#/portal/login');
+        const ok = await login(win, 'admin', newPass);
+        if (!ok) throw new Error('La cámara se activó pero no se pudo iniciar sesión después con la contraseña nueva.');
       }
     } else {
       // Login normal: probamos primero con la contraseña "actual" indicada,
@@ -145,11 +162,10 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
       // una configuración previa).
       let ok = await login(win, currentUser, currentPass);
       if (!ok) {
-        await win.loadURL(`http://${accessIp}/doc/index.html#/portal/login`);
-        await new Promise(r => setTimeout(r, 1500));
+        await navigateAndWaitForPortal(win, accessIp, '/doc/index.html#/portal/login');
         ok = await login(win, currentUser, newPass);
       }
-      if (!ok) throw new Error('No se pudo iniciar sesión con la contraseña actual ni con la nueva.');
+      if (!ok) throw new Error(`No se pudo iniciar sesión en ${accessIp} ni con la contraseña actual ('${currentPass}') ni con la nueva ('${newPass}'). Verificá que sea la IP correcta de esta cámara.`);
     }
 
     // Con sesión iniciada, la cookie del navegador ya autentica llamadas
@@ -178,9 +194,9 @@ async function applyNetwork({ accessIp, targetIp, targetMask, targetGateway }) {
   const { win } = session;
 
   try {
-    await win.loadURL(`http://${accessIp}/doc/index.html#/wizard`);
-    await waitFor(win, `location.hash.includes('/wizard')`, 6000);
-    await new Promise(r => setTimeout(r, 1000));
+    await navigateAndWaitForPortal(win, accessIp, '/doc/index.html#/wizard');
+    const onWizard = await waitFor(win, `document.querySelector('.el-form-item') != null`, 6000);
+    if (!onWizard) throw new Error('No se pudo llegar a la pantalla de ajustes de red del asistente.');
 
     // Si DHCP está activo hay que apagarlo antes de poder escribir una IP
     // fija — los switches/checkboxes de Element UI suelen ignorar el click

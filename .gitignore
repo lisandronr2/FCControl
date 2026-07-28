@@ -14,3 +14,6 @@ android/app/release/
 
 # ── App escritorio (Electron) ──────────────────────────────────
 electron-dist/
+*.exe
+*.crdownload
+Sin confirmar*
