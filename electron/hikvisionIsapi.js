@@ -182,15 +182,43 @@ async function applyNetwork({ accessIp, targetIp, targetMask, targetGateway }) {
     await waitFor(win, `location.hash.includes('/wizard')`, 6000);
     await new Promise(r => setTimeout(r, 1000));
 
-    // Si DHCP está tildado, hay que destildarlo para poder escribir IP fija
-    await exec(win, `
-      (function(){
-        const dhcp = Array.from(document.querySelectorAll('input[type=checkbox]'))
-          .find(i => i.closest('.el-form-item') &&
-            i.closest('.el-form-item').textContent.toUpperCase().includes('DHCP'));
-        if (dhcp && dhcp.checked) dhcp.click();
-      })()
-    `);
+    // Si DHCP está activo hay que apagarlo antes de poder escribir una IP
+    // fija — los switches/checkboxes de Element UI suelen ignorar el click
+    // sobre el <input> nativo (que suele estar oculto); hay que clickear el
+    // elemento visual que lo envuelve (.el-switch / .el-checkbox / label).
+    // Reintenta unas veces y verifica que realmente haya quedado apagado.
+    const dhcpOff = await (async () => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const state = await exec(win, `
+          (function(){
+            const dhcp = Array.from(document.querySelectorAll('input[type=checkbox]'))
+              .find(i => i.closest('.el-form-item') &&
+                i.closest('.el-form-item').textContent.toUpperCase().includes('DHCP'));
+            if (!dhcp) return 'NOT_FOUND';
+            if (!dhcp.checked) return 'OFF';
+            const clickable = dhcp.closest('.el-switch') || dhcp.closest('.el-checkbox')
+              || dhcp.closest('label') || dhcp;
+            clickable.click();
+            return 'CLICKED';
+          })()
+        `);
+        if (state === 'OFF') return true;
+        if (state === 'NOT_FOUND') return false;
+        await new Promise(r => setTimeout(r, 500));
+      }
+      // Última lectura, por si el último click sí surtió efecto
+      return await exec(win, `
+        (function(){
+          const dhcp = Array.from(document.querySelectorAll('input[type=checkbox]'))
+            .find(i => i.closest('.el-form-item') &&
+              i.closest('.el-form-item').textContent.toUpperCase().includes('DHCP'));
+          return dhcp ? !dhcp.checked : false;
+        })()
+      `);
+    })();
+    if (!dhcpOff) {
+      throw new Error('No se pudo desactivar el DHCP para poder fijar la IP estática.');
+    }
     await new Promise(r => setTimeout(r, 500));
 
     const ok = await exec(win, `
