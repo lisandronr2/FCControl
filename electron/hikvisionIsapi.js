@@ -1,226 +1,243 @@
-// Cliente ISAPI para cámaras Hikvision/HikMicro — corre en el proceso
-// principal de Electron (Node puro), sin las restricciones de un
-// navegador: acá no hay contenido mixto ni CORS, así que hablar HTTP/HTTPS
-// con la cámara es directo. Es el equivalente de escritorio del plugin
-// nativo de Android (HikvisionCameraPlugin.kt / HikvisionIsapiClient.kt /
-// DigestAuth.kt) — misma lógica, mismo flujo de activación/login, mismo
-// manejo del "corte esperado" al cambiar de IP.
+// Configuración de cámaras Hikvision/HikMicro — corre en el proceso
+// principal de Electron.
+//
+// La primera versión de este módulo hablaba HTTP/ISAPI directo (Digest
+// Auth). En la práctica, el modelo probado (HikMicro, firmware con portal
+// Vue/Element UI) cifra la contraseña de activación con un esquema
+// propietario no documentado antes de mandarla a /ISAPI/System/activate —
+// reversear ese cifrado a ciegas no es un uso razonable del tiempo.
+//
+// En cambio, esto abre una BrowserWindow (Chromium completo, con acceso
+// directo a la red local igual que el resto de Electron) apuntada al
+// panel web real de la cámara, y automatiza esa interfaz — login/activación
+// y el asistente de red — exactamente como lo haría un técnico. El cifrado
+// lo sigue haciendo el código original de la cámara, que sabemos que
+// funciona; nosotros solo completamos campos y apretamos botones.
 
-const http = require('http');
-const https = require('https');
-const crypto = require('crypto');
+const { BrowserWindow } = require('electron');
 
-function md5(input) {
-  return crypto.createHash('md5').update(input, 'utf8').digest('hex');
+function setNativeValue(js) {
+  // Los inputs de Vue/Element UI no detectan cambios hechos con .value = x
+  // directo — hay que usar el setter nativo del prototipo y disparar el
+  // evento 'input' para que el framework lo registre.
+  return `
+    (function(el, val){
+      const proto = Object.getPrototypeOf(el);
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+      setter.call(el, val);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    })(${js})
+  `;
 }
 
-function randomHex(bytes) {
-  return crypto.randomBytes(bytes).toString('hex');
+async function exec(win, script) {
+  return win.webContents.executeJavaScript(script);
 }
 
-function parseDigestChallenge(header) {
-  if (!header || !/^Digest/i.test(header.trim())) return null;
-  const params = {};
-  const re = /(\w+)="?([^",]+)"?/g;
-  let m;
-  while ((m = re.exec(header)) !== null) params[m[1]] = m[2];
-  if (!params.realm || !params.nonce) return null;
-  return { realm: params.realm, nonce: params.nonce, qop: params.qop, opaque: params.opaque };
-}
-
-function buildAuthorizationHeader(challenge, method, uri, username, password, nc = '00000001') {
-  const cnonce = randomHex(16);
-  const ha1 = md5(`${username}:${challenge.realm}:${password}`);
-  const ha2 = md5(`${method}:${uri}`);
-  const qop = challenge.qop && challenge.qop.split(',').map(s => s.trim()).find(s => s === 'auth');
-  const response = qop
-    ? md5(`${ha1}:${challenge.nonce}:${nc}:${cnonce}:${qop}:${ha2}`)
-    : md5(`${ha1}:${challenge.nonce}:${ha2}`);
-
-  let header = `Digest username="${username}", realm="${challenge.realm}", nonce="${challenge.nonce}", uri="${uri}", response="${response}"`;
-  if (qop) header += `, qop=${qop}, nc=${nc}, cnonce="${cnonce}"`;
-  if (challenge.opaque) header += `, opaque="${challenge.opaque}"`;
-  return header;
-}
-
-function xmlTagValue(xml, tag) {
-  const m = new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(xml);
-  return m ? m[1].trim() : null;
-}
-
-// Arma un detalle legible de un error ISAPI: la cámara casi siempre
-// devuelve algo como "Invalid Operation" sin más contexto, así que acá
-// sumamos el código HTTP y el subStatusCode (mucho más específico) si
-// la respuesta lo trae, para no quedarnos con un mensaje genérico.
-function describeIsapiError(resp) {
-  const statusString = xmlTagValue(resp.body, 'statusString');
-  const subStatusCode = xmlTagValue(resp.body, 'subStatusCode');
-  const parts = [];
-  parts.push(statusString || `HTTP ${resp.code}`);
-  if (subStatusCode) parts.push(`detalle: ${subStatusCode}`);
-  parts.push(`http=${resp.code}`);
-  return parts.join(' · ');
-}
-
-function rawRequest(protocol, hostname, port, method, path, headers, body, timeoutMs = 8000) {
-  return new Promise((resolve, reject) => {
-    const lib = protocol === 'https:' ? https : http;
-    const options = {
-      hostname, port, path, method,
-      headers: {
-        Accept: 'application/xml',
-        ...(body ? { 'Content-Type': 'application/xml', 'Content-Length': Buffer.byteLength(body) } : {}),
-        ...headers
-      },
-      timeout: timeoutMs
-    };
-    if (protocol === 'https:') options.rejectUnauthorized = false; // certificado autofirmado propio de la cámara
-
-    const req = lib.request(options, res => {
-      let data = '';
-      res.on('data', chunk => (data += chunk));
-      res.on('end', () => resolve({ code: res.statusCode, body: data, headers: res.headers }));
-    });
-    req.on('timeout', () => { req.destroy(new Error('timeout')); });
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
-  });
-}
-
-// Sondeo liviano para decidir si la cámara habla HTTPS (443, certificado
-// autofirmado) o HTTP (80) plano. Varios firmwares Hikvision/HikMicro
-// recientes exigen HTTPS específicamente para /ISAPI/Security/activate y
-// devuelven un rechazo genérico ("Invalid Operation") si se los llama por
-// HTTP — de ahí que convenga fijar el protocolo una sola vez por sesión.
-async function detectProtocol(accessIp, timeoutMs = 4000) {
-  try {
-    await rawRequest('https:', accessIp, 443, 'GET', '/ISAPI/System/deviceInfo', {}, null, timeoutMs);
-    return 'https:';
-  } catch (e) {
-    return 'http:';
+async function waitFor(win, conditionJs, timeoutMs = 10000, intervalMs = 300) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const ok = await exec(win, conditionJs);
+    if (ok) return true;
+    await new Promise(r => setTimeout(r, intervalMs));
   }
+  return false;
 }
 
-async function requestNoAuth(protocol, accessIp, method, path, body) {
-  const port = protocol === 'https:' ? 443 : 80;
-  return rawRequest(protocol, accessIp, port, method, path, {}, body);
+function findInputByPlaceholderJs(placeholderSubstr) {
+  return `Array.from(document.querySelectorAll('input')).find(i => i.placeholder && i.placeholder.includes(${JSON.stringify(placeholderSubstr)}))`;
 }
 
-async function requestAuth(protocol, accessIp, method, path, user, pass, body) {
-  const port = protocol === 'https:' ? 443 : 80;
-  const probe = await rawRequest(protocol, accessIp, port, method, path, {}, body);
-  if (probe.code !== 401) return probe;
-
-  const wwwAuth = probe.headers['www-authenticate'];
-  const challenge = parseDigestChallenge(wwwAuth);
-  if (!challenge) return probe;
-
-  const authHeader = buildAuthorizationHeader(challenge, method, path, user, pass);
-  return rawRequest(protocol, accessIp, port, method, path, { Authorization: authHeader }, body);
+function findInputByTypeJs(type) {
+  return `Array.from(document.querySelectorAll('input')).find(i => i.type === ${JSON.stringify(type)})`;
 }
 
-function escapeXml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+function findButtonByTextJs(text) {
+  return `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim().includes(${JSON.stringify(text)}))`;
 }
 
-// Sesiones en memoria del proceso, keyed por accessIp (se pierden al cerrar la app)
+// Sesiones activas: BrowserWindow ya logueado, keyed por accessIp
 const sessions = new Map();
+
+async function login(win, user, pass) {
+  const passInput = findInputByTypeJs('password');
+  const filled = await exec(win, `
+    (function(){
+      const userEl = ${findInputByPlaceholderJs('usuario')};
+      const passEl = ${passInput};
+      if (!userEl || !passEl) return false;
+      ${setNativeValue('userEl, ' + JSON.stringify(user))};
+      ${setNativeValue('passEl, ' + JSON.stringify(pass))};
+      return true;
+    })()
+  `);
+  if (!filled) return false;
+
+  await new Promise(r => setTimeout(r, 300));
+  await exec(win, `
+    (function(){
+      const btn = ${findButtonByTextJs('Iniciar sesión')};
+      if (btn) btn.click();
+    })()
+  `);
+
+  await waitFor(win, `!location.hash.includes('/login')`, 8000);
+  await new Promise(r => setTimeout(r, 800));
+  const stillOnLogin = await exec(win, `location.hash.includes('/login')`);
+  return !stillOnLogin;
+}
+
+async function activate(win, newPass) {
+  const filled = await exec(win, `
+    (function(){
+      const passInputs = Array.from(document.querySelectorAll('input[type=password]'));
+      if (passInputs.length < 2) return false;
+      ${setNativeValue('passInputs[0], ' + JSON.stringify(newPass))};
+      ${setNativeValue('passInputs[1], ' + JSON.stringify(newPass))};
+      return true;
+    })()
+  `);
+  if (!filled) return false;
+
+  await new Promise(r => setTimeout(r, 300));
+  await exec(win, `
+    (function(){
+      const btn = ${findButtonByTextJs('Activación')};
+      if (btn) btn.click();
+    })()
+  `);
+
+  await waitFor(win, `!location.hash.includes('/wizard') === false || !document.querySelector('input[type=password]')`, 8000);
+  await new Promise(r => setTimeout(r, 1000));
+  return true;
+}
 
 async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '12345', newPass }) {
   if (!accessIp) throw new Error('Falta accessIp');
   if (!newPass) throw new Error('Falta newPass');
 
-  const protocol = await detectProtocol(accessIp);
-  console.log(`[hikvision] ${accessIp}: usando ${protocol}`);
+  const win = new BrowserWindow({ width: 900, height: 700, show: true });
+  win.setMenuBarVisibility(false);
 
-  const activateBody = `<?xml version="1.0" encoding="UTF-8"?>
-<ActivationInfo xmlns="http://www.isapi.org/ver20/XMLSchema">
-<Password>${escapeXml(newPass)}</Password>
-</ActivationInfo>`;
-  const activateResp = await requestNoAuth(protocol, accessIp, 'POST', '/ISAPI/Security/activate', activateBody);
-  console.log('[hikvision] activate:', activateResp.code, activateResp.body);
+  try {
+    await win.loadURL(`http://${accessIp}/doc/index.html#/portal/login`);
+    await new Promise(r => setTimeout(r, 1500));
 
-  let effectiveUser = 'admin';
-  let effectivePass;
-  let activated;
+    // ¿Pantalla de activación de fábrica (dos campos de contraseña) o login normal?
+    const isActivationScreen = await exec(win, `document.querySelectorAll('input[type=password]').length >= 2`);
 
-  if (activateResp.code >= 200 && activateResp.code < 300) {
-    activated = true;
-    effectivePass = newPass;
-  } else {
-    activated = false;
-    const activateDetail = describeIsapiError(activateResp);
-    const userBody = `<?xml version="1.0" encoding="UTF-8"?>
-<User xmlns="http://www.isapi.org/ver20/XMLSchema">
-<id>1</id>
-<userName>${currentUser}</userName>
-<password>${escapeXml(newPass)}</password>
-</User>`;
-    const pwResp = await requestAuth(protocol, accessIp, 'PUT', '/ISAPI/Security/users/1', currentUser, currentPass, userBody);
-    console.log('[hikvision] change-password:', pwResp.code, pwResp.body);
-    if (pwResp.code < 200 || pwResp.code >= 300) {
-      throw new Error(
-        `Cambio de contraseña rechazado (${describeIsapiError(pwResp)}). ` +
-        `[La activación de fábrica también falló antes: ${activateDetail}]`
-      );
+    let activated = false;
+    if (isActivationScreen) {
+      const ok = await activate(win, newPass);
+      if (!ok) throw new Error('No se pudo completar la pantalla de activación de fábrica.');
+      activated = true;
+      // Tras activar, algunos firmwares loguean automático; si no, probamos login explícito
+      const stillNeedsLogin = await exec(win, `location.hash.includes('/login') || document.querySelectorAll('input[type=password]').length >= 2`);
+      if (stillNeedsLogin) {
+        await win.loadURL(`http://${accessIp}/doc/index.html#/portal/login`);
+        await new Promise(r => setTimeout(r, 1500));
+        await login(win, 'admin', newPass);
+      }
+    } else {
+      // Login normal: probamos primero con la contraseña "actual" indicada,
+      // y si falla, con la contraseña objetivo (por si ya estaba puesta de
+      // una configuración previa).
+      let ok = await login(win, currentUser, currentPass);
+      if (!ok) {
+        await win.loadURL(`http://${accessIp}/doc/index.html#/portal/login`);
+        await new Promise(r => setTimeout(r, 1500));
+        ok = await login(win, currentUser, newPass);
+      }
+      if (!ok) throw new Error('No se pudo iniciar sesión con la contraseña actual ni con la nueva.');
     }
-    effectivePass = newPass;
+
+    // Con sesión iniciada, la cookie del navegador ya autentica llamadas
+    // directas a la ISAPI de solo lectura (confirmado: responde XML plano,
+    // sin cifrado, para GETs autenticados por cookie de sesión).
+    const netXml = await exec(win, `
+      fetch('/ISAPI/System/Network/interfaces', { credentials: 'same-origin' })
+        .then(r => r.text()).catch(() => '')
+    `);
+    const mac = (netXml.match(/<MACAddress>([^<]*)<\/MACAddress>/) || [])[1] || '';
+    const currentIpVal = (netXml.match(/<ipAddress>([^<]*)<\/ipAddress>/) || [])[1] || '';
+    const currentMask = (netXml.match(/<subnetMask>([^<]*)<\/subnetMask>/) || [])[1] || '';
+
+    sessions.set(accessIp, { win });
+
+    return { ok: true, activated, mac, currentIp: currentIpVal, currentMask, interfaceId: '1' };
+  } catch (e) {
+    win.destroy();
+    throw e;
   }
-
-  const netResp = await requestAuth(protocol, accessIp, 'GET', '/ISAPI/System/Network/interfaces', effectiveUser, effectivePass);
-  if (netResp.code < 200 || netResp.code >= 300) {
-    throw new Error(`No se pudo leer la configuración de red (${describeIsapiError(netResp)}).`);
-  }
-
-  const mac = xmlTagValue(netResp.body, 'MACAddress') || '';
-  const currentIp = xmlTagValue(netResp.body, 'ipAddress') || '';
-  const currentMask = xmlTagValue(netResp.body, 'subnetMask') || '';
-  const interfaceId = xmlTagValue(netResp.body, 'id') || '1';
-
-  sessions.set(accessIp, { protocol, user: effectiveUser, pass: effectivePass, interfaceId });
-
-  return { ok: true, activated, mac, currentIp, currentMask, interfaceId };
 }
 
 async function applyNetwork({ accessIp, targetIp, targetMask, targetGateway }) {
   const session = sessions.get(accessIp);
   if (!session) throw new Error('Primero ejecutá el paso de credenciales (readAndSecure) para esta cámara.');
-  if (!targetIp) throw new Error('Falta targetIp');
-  if (!targetMask) throw new Error('Falta targetMask');
+  const { win } = session;
 
-  const gwXml = targetGateway
-    ? `<DefaultGateway><ipAddress>${escapeXml(targetGateway)}</ipAddress></DefaultGateway>` : '';
-
-  const body = `<?xml version="1.0" encoding="UTF-8"?>
-<NetworkInterface xmlns="http://www.isapi.org/ver20/XMLSchema">
-<id>${session.interfaceId}</id>
-<IPAddress>
-<ipVersion>v4</ipVersion>
-<addressingType>static</addressingType>
-<ipAddress>${escapeXml(targetIp)}</ipAddress>
-<subnetMask>${escapeXml(targetMask)}</subnetMask>
-${gwXml}
-</IPAddress>
-</NetworkInterface>`;
-
-  const path = `/ISAPI/System/Network/interfaces/${session.interfaceId}`;
   try {
-    const resp = await requestAuth(session.protocol, accessIp, 'PUT', path, session.user, session.pass, body);
-    sessions.delete(accessIp); // la IP cambió: la sesión ya no es válida a esta dirección
+    await win.loadURL(`http://${accessIp}/doc/index.html#/wizard`);
+    await waitFor(win, `location.hash.includes('/wizard')`, 6000);
+    await new Promise(r => setTimeout(r, 1000));
 
-    if (resp.code >= 200 && resp.code < 300) {
-      return { ok: true, probablySucceeded: false };
-    }
-    return { ok: false, message: `No se pudo aplicar la red (${describeIsapiError(resp)}).` };
-  } catch (e) {
-    // Esperado: la cámara cambia de IP a mitad de la respuesta y corta la conexión.
+    // Si DHCP está tildado, hay que destildarlo para poder escribir IP fija
+    await exec(win, `
+      (function(){
+        const dhcp = Array.from(document.querySelectorAll('input[type=checkbox]'))
+          .find(i => i.closest('.el-form-item') &&
+            i.closest('.el-form-item').textContent.toUpperCase().includes('DHCP'));
+        if (dhcp && dhcp.checked) dhcp.click();
+      })()
+    `);
+    await new Promise(r => setTimeout(r, 500));
+
+    const ok = await exec(win, `
+      (function(){
+        function byLabel(sub) {
+          const items = Array.from(document.querySelectorAll('.el-form-item'));
+          const item = items.find(it => {
+            const lbl = it.querySelector('label');
+            return lbl && lbl.textContent.includes(sub);
+          });
+          return item ? item.querySelector('input[type=text]') : null;
+        }
+        function setVal(el, val) {
+          if (!el) return false;
+          const proto = Object.getPrototypeOf(el);
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+          setter.call(el, val);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        const ipEl = byLabel('Dirección IPv4 del dispositivo');
+        const maskEl = byLabel('Máscara de subred IPv4');
+        const gwEl = byLabel('Pasarela predeterminada IPv4');
+        let allOk = setVal(ipEl, ${JSON.stringify(targetIp)}) && setVal(maskEl, ${JSON.stringify(targetMask)});
+        if (gwEl && ${JSON.stringify(!!targetGateway)}) setVal(gwEl, ${JSON.stringify(targetGateway || '')});
+        return allOk;
+      })()
+    `);
+    if (!ok) throw new Error('No se encontraron los campos de IP/máscara en el asistente.');
+
+    await new Promise(r => setTimeout(r, 500));
+    await exec(win, `
+      (function(){
+        const btn = ${findButtonByTextJs('Siguiente')};
+        if (btn) btn.click();
+      })()
+    `);
+    await new Promise(r => setTimeout(r, 2500));
+
     sessions.delete(accessIp);
-    if (String(e.message).includes('timeout') || e.code === 'ECONNRESET') {
-      return { ok: true, probablySucceeded: true };
-    }
-    throw e;
+    win.destroy();
+    return { ok: true, probablySucceeded: true };
+  } catch (e) {
+    sessions.delete(accessIp);
+    try { win.destroy(); } catch (_) {}
+    return { ok: false, message: e.message || String(e) };
   }
 }
 
