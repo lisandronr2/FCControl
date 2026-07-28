@@ -47,6 +47,20 @@ function xmlTagValue(xml, tag) {
   return m ? m[1].trim() : null;
 }
 
+// Arma un detalle legible de un error ISAPI: la cámara casi siempre
+// devuelve algo como "Invalid Operation" sin más contexto, así que acá
+// sumamos el código HTTP y el subStatusCode (mucho más específico) si
+// la respuesta lo trae, para no quedarnos con un mensaje genérico.
+function describeIsapiError(resp) {
+  const statusString = xmlTagValue(resp.body, 'statusString');
+  const subStatusCode = xmlTagValue(resp.body, 'subStatusCode');
+  const parts = [];
+  parts.push(statusString || `HTTP ${resp.code}`);
+  if (subStatusCode) parts.push(`detalle: ${subStatusCode}`);
+  parts.push(`http=${resp.code}`);
+  return parts.join(' · ');
+}
+
 function rawRequest(baseUrl, method, path, headers, body, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, baseUrl);
@@ -121,6 +135,7 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
     effectivePass = newPass;
   } else {
     activated = false;
+    const activateDetail = describeIsapiError(activateResp);
     const userBody = `<?xml version="1.0" encoding="UTF-8"?>
 <User xmlns="http://www.hikvision.com/ver20/XMLSchema">
 <id>1</id>
@@ -129,15 +144,17 @@ async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '1
 </User>`;
     const pwResp = await requestAuth(baseUrl, 'PUT', '/ISAPI/Security/users/1', currentUser, currentPass, userBody);
     if (pwResp.code < 200 || pwResp.code >= 300) {
-      const msg = xmlTagValue(pwResp.body, 'statusString') || `La cámara rechazó las credenciales actuales (código ${pwResp.code}).`;
-      throw new Error(msg);
+      throw new Error(
+        `Cambio de contraseña rechazado (${describeIsapiError(pwResp)}). ` +
+        `[La activación de fábrica también falló antes: ${activateDetail}]`
+      );
     }
     effectivePass = newPass;
   }
 
   const netResp = await requestAuth(baseUrl, 'GET', '/ISAPI/System/Network/interfaces', effectiveUser, effectivePass);
   if (netResp.code < 200 || netResp.code >= 300) {
-    throw new Error(`No se pudo leer la configuración de red (código ${netResp.code}).`);
+    throw new Error(`No se pudo leer la configuración de red (${describeIsapiError(netResp)}).`);
   }
 
   const mac = xmlTagValue(netResp.body, 'MACAddress') || '';
@@ -179,7 +196,7 @@ ${gwXml}
     if (resp.code >= 200 && resp.code < 300) {
       return { ok: true, probablySucceeded: false };
     }
-    return { ok: false, message: xmlTagValue(resp.body, 'statusString') || `La cámara devolvió un error (código ${resp.code}).` };
+    return { ok: false, message: `No se pudo aplicar la red (${describeIsapiError(resp)}).` };
   } catch (e) {
     // Esperado: la cámara cambia de IP a mitad de la respuesta y corta la conexión.
     sessions.delete(accessIp);

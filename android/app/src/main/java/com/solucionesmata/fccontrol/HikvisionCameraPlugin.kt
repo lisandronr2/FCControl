@@ -65,6 +65,7 @@ class HikvisionCameraPlugin : Plugin() {
                 } else {
                     // Ya estaba activa: login con credenciales actuales y cambio de contraseña
                     activated = false
+                    val activateDetail = HikvisionIsapiClient.describeIsapiError(activateResp)
                     val userBody = """<?xml version="1.0" encoding="UTF-8"?>
                         |<User xmlns="http://www.hikvision.com/ver20/XMLSchema">
                         |<id>1</id>
@@ -73,8 +74,8 @@ class HikvisionCameraPlugin : Plugin() {
                         |</User>""".trimMargin()
                     val pwResp = client.requestAuth("PUT", "/ISAPI/Security/users/1", currentUser, currentPass, userBody)
                     if (pwResp.code !in 200..299) {
-                        val msg = HikvisionIsapiClient.xmlTagValue(pwResp.body, "statusString")
-                            ?: "La cámara rechazó las credenciales actuales (código ${pwResp.code})."
+                        val msg = "Cambio de contraseña rechazado (${HikvisionIsapiClient.describeIsapiError(pwResp)}). " +
+                            "[La activación de fábrica también falló antes: $activateDetail]"
                         return@Thread postError(call, msg)
                     }
                     effectivePass = newPass
@@ -83,7 +84,7 @@ class HikvisionCameraPlugin : Plugin() {
                 // 2) Leer red actual (IP, máscara, gateway) + MAC real desde la cámara
                 val netResp = client.requestAuth("GET", "/ISAPI/System/Network/interfaces", effectiveUser, effectivePass)
                 if (netResp.code !in 200..299) {
-                    return@Thread postError(call, "No se pudo leer la configuración de red (código ${netResp.code}).")
+                    return@Thread postError(call, "No se pudo leer la configuración de red (${HikvisionIsapiClient.describeIsapiError(netResp)}).")
                 }
 
                 val mac = HikvisionIsapiClient.xmlTagValue(netResp.body, "MACAddress") ?: ""
@@ -152,8 +153,7 @@ class HikvisionCameraPlugin : Plugin() {
                     result.put("probablySucceeded", false)
                 } else {
                     result.put("ok", false)
-                    result.put("message", HikvisionIsapiClient.xmlTagValue(resp.body, "statusString")
-                        ?: "La cámara devolvió un error (código ${resp.code}).")
+                    result.put("message", "No se pudo aplicar la red (${HikvisionIsapiClient.describeIsapiError(resp)}).")
                 }
                 activity.runOnUiThread { call.resolve(result) }
 

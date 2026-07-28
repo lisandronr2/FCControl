@@ -90,5 +90,20 @@ class HikvisionIsapiClient(private val network: Network, private val baseUrl: St
                 null
             }
         }
+
+        /**
+         * Arma un detalle legible de un error ISAPI: la cámara casi siempre
+         * devuelve algo como "Invalid Operation" sin más contexto, así que
+         * acá sumamos el código HTTP y el subStatusCode (mucho más
+         * específico) si la respuesta lo trae.
+         */
+        fun describeIsapiError(resp: IsapiResponse): String {
+            val statusString = xmlTagValue(resp.body, "statusString")
+            val subStatusCode = xmlTagValue(resp.body, "subStatusCode")
+            val parts = mutableListOf(statusString ?: "HTTP ${resp.code}")
+            if (subStatusCode != null) parts.add("detalle: $subStatusCode")
+            parts.add("http=${resp.code}")
+            return parts.joinToString(" · ")
+        }
     }
 }
