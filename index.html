@@ -1392,6 +1392,19 @@ function hasCapturedSerialOrMac(nombre){
   return !!val;
 }
 
+// Devuelve el Serial (o la MAC si no hay Serial) ya capturado para un
+// dispositivo, para mostrarlo junto al badge "✓ Listo"
+function getCapturedValue(nombre){
+  const cached = getDeviceFromCache(nombre);
+  if (!cached || !cached.result) return '';
+  const headers = cached.headers || [];
+  const serialHeader = findHeaderKey(headers, ['SERIAL','SERIAL NUMBER']);
+  const serialVal = serialHeader ? (cached.result[serialHeader] || '').toString().trim() : '';
+  if (serialVal && !serialVal.toUpperCase().includes('PENDING')) return serialVal;
+  const macHeader = findHeaderKey(headers, ['MAC','MAC ADDRESS']);
+  return macHeader ? (cached.result[macHeader] || '').toString().trim() : '';
+}
+
 // Busca si el serial dado ya está asignado a OTRO dispositivo en la caché
 // offline (para detectar duplicados al escanear). Devuelve
 // { name, rowIndex } del dueño actual, o null si no está en uso.
@@ -1462,7 +1475,8 @@ function updateResultsListBadge(nombre, done){
       if (badge){
         badge.classList.toggle('done', done);
         badge.classList.toggle('pend', !done);
-        badge.textContent = done ? '✓ Listo' : 'Pendiente';
+        const val = done ? getCapturedValue(nombre) : '';
+        badge.textContent = done ? ('✓ Listo' + (val ? ' · ' + val : '')) : 'Pendiente';
       }
       break;
     }
@@ -1553,7 +1567,8 @@ function renderValueDropdown(query){
     item.className = 'dd-item';
     let badge = '';
     if (mode === 'NOMBRE' && hasCapturedSerialOrMac(o.value)){
-      badge = '<span class="dd-badge done">✓ Listo</span>';
+      const val = getCapturedValue(o.value);
+      badge = '<span class="dd-badge done">✓ Listo' + (val ? ' · ' + val : '') + '</span>';
     }
     item.innerHTML = '<span class="dd-name">' + highlight(o.label, query.trim()) + '</span>' + badge;
     item.addEventListener('mousedown', e => {
@@ -1633,6 +1648,7 @@ function executeSelectSearch(mode, val){
 
     items.forEach(entry => {
       const done   = dayLog.some(l => l.nombre === entry.name) || hasCapturedSerialOrMac(entry.name);
+      const capturedVal = done ? getCapturedValue(entry.name) : '';
       const modelo = getModelo(entry.name);
       const div    = document.createElement('div');
       div.className = 'results-item results-item--child';
@@ -1642,7 +1658,7 @@ function executeSelectSearch(mode, val){
           (modelo ? ' <span class="ri-sub">· ' + modelo + '</span>' : '') +
         '</span>' +
         '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
-          (done ? '✓ Listo' : 'Pendiente') +
+          (done ? '✓ Listo' + (capturedVal ? ' · ' + capturedVal : '') : 'Pendiente') +
         '</span>';
       div.addEventListener('click', () => {
         navList  = orderedNames;
