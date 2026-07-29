@@ -1381,6 +1381,66 @@ function hasCapturedSerial(nombre){
   return !!val && !val.toUpperCase().includes('PENDING');
 }
 
+// Verdadero si el Sheet ya tiene Serial O MAC capturados para este dispositivo
+function hasCapturedSerialOrMac(nombre){
+  if (hasCapturedSerial(nombre)) return true;
+  const cached = getDeviceFromCache(nombre);
+  if (!cached || !cached.result) return false;
+  const macHeader = findHeaderKey(cached.headers || [], ['MAC','MAC ADDRESS']);
+  if (!macHeader) return false;
+  const val = (cached.result[macHeader] || '').toString().trim();
+  return !!val;
+}
+
+// Busca si el serial dado ya está asignado a OTRO dispositivo en la caché
+// offline (para detectar duplicados al escanear). Devuelve
+// { name, rowIndex } del dueño actual, o null si no está en uso.
+function findDeviceWithSerial(serial, excludeName){
+  const target = (serial || '').trim().toUpperCase();
+  if (!target) return null;
+  const excludeKey = (excludeName || '').trim().toLowerCase();
+  const map = getDevicesMap();
+  for (const key in map){
+    if (key === excludeKey) continue;
+    const dev = map[key];
+    const headers = dev.headers || [];
+    const result  = dev.result  || {};
+    const serialHeader = findHeaderKey(headers, ['SERIAL','SERIAL NUMBER']);
+    if (!serialHeader) continue;
+    const val = (result[serialHeader] || '').toString().trim().toUpperCase();
+    if (val && val === target){
+      const nombreHeader = findHeaderKey(headers, ['NOMBRE','NAME']);
+      const nombre = (nombreHeader && result[nombreHeader]) || key;
+      return { name: nombre, rowIndex: dev.rowIndex };
+    }
+  }
+  return null;
+}
+
+// Quita el serial de un dispositivo (porque se movió a otro) en el Sheet;
+// si no hay red, lo deja en la cola offline para sincronizar después. Es
+// "best effort": no bloquea el flujo de guardado del dispositivo actual.
+async function clearSerialFromDevice(transfer){
+  const payload = { nombre: transfer.name, serial: '', rowIndex: transfer.rowIndex, allowEmptySerial: true };
+  const cachedOld = getDeviceFromCache(transfer.name);
+  const oldSerialHeader = cachedOld ? findHeaderKey(cachedOld.headers || [], ['SERIAL','SERIAL NUMBER']) : null;
+
+  try {
+    const res = await fetchWithTimeout(apiUrl, {
+      method:  'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body:    JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'No se pudo quitar el serial anterior.');
+  } catch(e){
+    addToPendingQueue(payload);
+  }
+
+  if (oldSerialHeader) patchCachedDevice(transfer.name, { [oldSerialHeader]: '' });
+  updateResultsListBadge(transfer.name, false);
+}
+
 // Actualiza campos puntuales del dispositivo en la caché local sin
 // pisar el resto de la entrada (headers, estadoOptions, etc.)
 function patchCachedDevice(nombre, resultPatch){
@@ -1487,10 +1547,15 @@ function renderValueDropdown(query){
     return;
   }
 
+  const mode = $('searchModeSelect').value;
   matches.slice(0, 60).forEach(o => {
     const item = document.createElement('div');
     item.className = 'dd-item';
-    item.innerHTML = '<span class="dd-name">' + highlight(o.label, query.trim()) + '</span>';
+    let badge = '';
+    if (mode === 'NOMBRE' && hasCapturedSerialOrMac(o.value)){
+      badge = '<span class="dd-badge done">✓ Listo</span>';
+    }
+    item.innerHTML = '<span class="dd-name">' + highlight(o.label, query.trim()) + '</span>' + badge;
     item.addEventListener('mousedown', e => {
       e.preventDefault(); // evita blur antes del click
       chooseValueOption(o);
@@ -1567,7 +1632,7 @@ function executeSelectSearch(mode, val){
     resultsList.appendChild(hdr);
 
     items.forEach(entry => {
-      const done   = dayLog.some(l => l.nombre === entry.name) || hasCapturedSerial(entry.name);
+      const done   = dayLog.some(l => l.nombre === entry.name) || hasCapturedSerialOrMac(entry.name);
       const modelo = getModelo(entry.name);
       const div    = document.createElement('div');
       div.className = 'results-item results-item--child';
@@ -1679,6 +1744,7 @@ function findHeaderKey(headers, candidates){
 }
 
 function renderCard(nombre, record, headers, estadoOptions){
+  pendingSerialTransfer = null;
   $('cardName').textContent = nombre;
 
   // Chips
@@ -2035,6 +2101,12 @@ $('saveBtn').addEventListener('click', async () => {
       localStorage.setItem(KEYS.log, JSON.stringify(dayLog));
 
       showToast('✓ ' + nombre + ' actualizado en el Sheet', 'ok');
+
+      if (pendingSerialTransfer){
+        const transfer = pendingSerialTransfer;
+        pendingSerialTransfer = null;
+        clearSerialFromDevice(transfer);
+      }
     } else {
       showToast(data.error || 'No se pudo guardar.', 'err');
     }
@@ -2053,6 +2125,16 @@ $('saveBtn').addEventListener('click', async () => {
     if (mac && current.macHeader) resultPatch[current.macHeader] = mac;
     patchCachedDevice(nombre, resultPatch);
     updateResultsListBadge(nombre, true);
+
+    if (pendingSerialTransfer){
+      const transfer = pendingSerialTransfer;
+      pendingSerialTransfer = null;
+      addToPendingQueue({ nombre: transfer.name, serial: '', rowIndex: transfer.rowIndex, allowEmptySerial: true });
+      const cachedOld = getDeviceFromCache(transfer.name);
+      const oldSerialHeader = cachedOld ? findHeaderKey(cachedOld.headers || [], ['SERIAL','SERIAL NUMBER']) : null;
+      if (oldSerialHeader) patchCachedDevice(transfer.name, { [oldSerialHeader]: '' });
+      updateResultsListBadge(transfer.name, false);
+    }
 
     showToast('Sin red — guardado en cola local 📥', '');
   } finally {
@@ -2226,6 +2308,12 @@ $('syncBtn').addEventListener('click', syncAllDevices);
 /* ════ Scanner de código de barras / QR (iOS + Android) ══════ */
 let scanner = null;
 
+// Cuando un serial escaneado le "roba" el serial a otro dispositivo, se
+// guarda acá hasta que se confirme el guardado — recién ahí se limpia el
+// serial del dispositivo anterior (si el técnico nunca guarda, no se
+// pierde nada). Se resetea al cambiar de dispositivo.
+let pendingSerialTransfer = null;
+
 // Quita el identificador de simbología AIM (ISO/IEC 15424) que algunos
 // escáneres anteponen al texto decodificado, ej. "]C1SN123456" → "SN123456".
 // ]C1=Code128, ]E0=EAN, ]Q0=QR, ]I0=Interleaved 2/5, etc.
@@ -2248,11 +2336,9 @@ async function startScanner() {
       { facingMode: 'environment' },
       { fps: 15, aspectRatio: 1.0 },
       (decodedText) => {
-        $('fSerial').value = stripAimPrefix(decodedText.trim());
-        $('fSerial').classList.remove('err');
-        $('serialErr').classList.remove('show');
-        showToast('✓ Código escaneado', 'ok');
+        const scanned = stripAimPrefix(decodedText.trim());
         stopScanner();
+        handleScannedSerial(scanned);
       },
       () => {}
     );
@@ -2287,6 +2373,41 @@ async function stopScanner() {
     scanner = null;
   }
   $('scanModal').classList.add('hidden');
+}
+
+// Compara el serial recién escaneado contra el Sheet (caché offline) antes
+// de aplicarlo: si ya está asignado a otro dispositivo, confirma moverlo;
+// si el dispositivo actual ya tiene un serial distinto, confirma pisarlo.
+function handleScannedSerial(scanned){
+  if (!scanned) return;
+  if (!current){ showToast('Selecciona un dispositivo primero.', 'err'); return; }
+
+  const currentName = $('cardName').textContent.trim();
+
+  const owner = findDeviceWithSerial(scanned, currentName);
+  if (owner){
+    const proceed = confirm(
+      'El serial "' + scanned + '" ya está asignado a "' + owner.name + '".\n\n' +
+      '¿Continuar y moverlo a "' + currentName + '"? Se eliminará del dispositivo anterior al guardar.'
+    );
+    if (!proceed){ showToast('Escaneo cancelado.', ''); return; }
+  }
+
+  const existing = ($('fSerial').value || '').trim();
+  if (existing && existing.toUpperCase() !== scanned.toUpperCase() && !existing.toUpperCase().includes('PENDING')){
+    const overwrite = confirm(
+      '"' + currentName + '" ya tiene el serial "' + existing + '".\n\n' +
+      '¿Sobrescribirlo con el nuevo serial escaneado "' + scanned + '"?'
+    );
+    if (!overwrite){ showToast('Escaneo cancelado.', ''); return; }
+  }
+
+  pendingSerialTransfer = owner ? { name: owner.name, rowIndex: owner.rowIndex } : null;
+
+  $('fSerial').value = scanned;
+  $('fSerial').classList.remove('err');
+  $('serialErr').classList.remove('show');
+  showToast('✓ Código escaneado', 'ok');
 }
 
 /* ════ Cola offline ══════════════════════════════════════════ */

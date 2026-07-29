@@ -8,23 +8,30 @@ import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
-import com.solucionesmata.fccontrol.isapi.HikvisionIsapiClient
-import java.io.IOException
-import java.net.SocketTimeoutException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
- * Puente nativo entre FCControl (JS/WebView) y la ISAPI de una cámara
- * Hikvision conectada a la misma WiFi local del teléfono.
+ * Puente nativo entre FCControl (JS) y el panel web real de la cámara
+ * Hikvision/HikMicro, conectada por WiFi o Ethernet a la tablet.
  *
- * La WebView de la app sigue restringida a HTTPS (allowMixedContent=false);
- * estas llamadas van por un cliente HTTP nativo aparte, atado explícitamente
- * a la red WiFi activa, y nunca pasan por el motor de la WebView.
+ * Antes esto hablaba ISAPI/Digest directo (ver commits previos): funciona
+ * en cámaras Hikvision clásicas, pero el modelo HikMicro en uso cifra la
+ * contraseña de activación con un esquema propietario no documentado — la
+ * cámara devuelve 403 porque nunca entiende la contraseña que le mandamos
+ * en crudo. En vez de reversear ese cifrado, automatizamos el panel web
+ * real (HikvisionPortalAutomation, un WebView oculto) exactamente como lo
+ * haría un técnico — el cifrado lo sigue haciendo el JS original de la
+ * cámara, que sabemos que funciona (confirmado contra hardware real desde
+ * la versión de escritorio, que usa la misma estrategia).
  */
 @CapacitorPlugin(name = "HikvisionCamera")
 class HikvisionCameraPlugin : Plugin() {
 
-    private data class Session(val client: HikvisionIsapiClient, val user: String, val pass: String, val interfaceId: String)
-    private val sessions = mutableMapOf<String, Session>()
+    private val scope = CoroutineScope(Dispatchers.Main)
+    private var automation: HikvisionPortalAutomation? = null
+    private var boundNetwork: Network? = null
 
     // Las cámaras se configuran por red cableada (Ethernet vía adaptador
     // USB-C) o WiFi según el equipo — no asumimos una sola.
@@ -37,6 +44,26 @@ class HikvisionCameraPlugin : Plugin() {
         }
     }
 
+    // La tablet puede tener datos móviles activos a la vez que la red local
+    // de la cámara (que casi nunca tiene salida a internet) — sin atar el
+    // proceso a la red correcta, Android puede enrutar el WebView por la
+    // red equivocada y la cámara nunca responde.
+    private fun bindToLocalNetwork(): Boolean {
+        val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = activeLocalNetwork() ?: return false
+        cm.bindProcessToNetwork(network)
+        boundNetwork = network
+        return true
+    }
+
+    private fun unbindNetwork() {
+        if (boundNetwork != null) {
+            val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.bindProcessToNetwork(null)
+            boundNetwork = null
+        }
+    }
+
     @PluginMethod
     fun readAndSecure(call: PluginCall) {
         val accessIp = call.getString("accessIp") ?: return call.reject("Falta accessIp")
@@ -44,141 +71,56 @@ class HikvisionCameraPlugin : Plugin() {
         val currentPass = call.getString("currentPass") ?: "12345"
         val newPass = call.getString("newPass") ?: return call.reject("Falta newPass")
 
-        val network = activeLocalNetwork()
-            ?: return call.reject("Sin conexión a la red de la cámara. Conectá el cable o el WiFi a la red donde está la cámara.")
+        if (!bindToLocalNetwork()) {
+            return call.reject("Sin conexión a la red de la cámara. Conectá el cable o el WiFi a la red donde está la cámara.")
+        }
 
-        Thread {
+        scope.launch {
             try {
-                val baseUrl = HikvisionIsapiClient.detectProtocol(network, accessIp)
-                val client = HikvisionIsapiClient(network, baseUrl)
-
-                // 1) Intentar activación (cámara de fábrica, nunca configurada)
-                val activateBody = """<?xml version="1.0" encoding="UTF-8"?>
-                    |<ActivationInfo xmlns="http://www.isapi.org/ver20/XMLSchema">
-                    |<Password>${escapeXml(newPass)}</Password>
-                    |</ActivationInfo>""".trimMargin()
-                val activateResp = client.requestNoAuth("POST", "/ISAPI/Security/activate", activateBody)
-
-                var effectiveUser = "admin"
-                var effectivePass: String
-                var activated: Boolean
-
-                if (activateResp.code in 200..299) {
-                    activated = true
-                    effectivePass = newPass
-                } else {
-                    // Ya estaba activa: login con credenciales actuales y cambio de contraseña
-                    activated = false
-                    val activateDetail = HikvisionIsapiClient.describeIsapiError(activateResp)
-                    val userBody = """<?xml version="1.0" encoding="UTF-8"?>
-                        |<User xmlns="http://www.isapi.org/ver20/XMLSchema">
-                        |<id>1</id>
-                        |<userName>$currentUser</userName>
-                        |<password>${escapeXml(newPass)}</password>
-                        |</User>""".trimMargin()
-                    val pwResp = client.requestAuth("PUT", "/ISAPI/Security/users/1", currentUser, currentPass, userBody)
-                    if (pwResp.code !in 200..299) {
-                        val msg = "Cambio de contraseña rechazado (${HikvisionIsapiClient.describeIsapiError(pwResp)}). " +
-                            "[La activación de fábrica también falló antes: $activateDetail]"
-                        return@Thread postError(call, msg)
-                    }
-                    effectivePass = newPass
-                }
-
-                // 2) Leer red actual (IP, máscara, gateway) + MAC real desde la cámara
-                val netResp = client.requestAuth("GET", "/ISAPI/System/Network/interfaces", effectiveUser, effectivePass)
-                if (netResp.code !in 200..299) {
-                    return@Thread postError(call, "No se pudo leer la configuración de red (${HikvisionIsapiClient.describeIsapiError(netResp)}).")
-                }
-
-                val mac = HikvisionIsapiClient.xmlTagValue(netResp.body, "MACAddress") ?: ""
-                val curIp = HikvisionIsapiClient.xmlTagValue(netResp.body, "ipAddress") ?: ""
-                val curMask = HikvisionIsapiClient.xmlTagValue(netResp.body, "subnetMask") ?: ""
-                val interfaceId = HikvisionIsapiClient.xmlTagValue(netResp.body, "id") ?: "1"
-
-                sessions[accessIp] = Session(client, effectiveUser, effectivePass, interfaceId)
+                val auto = HikvisionPortalAutomation(activity)
+                automation = auto
+                val secured = auto.readAndSecure(accessIp, currentUser, currentPass, newPass)
 
                 val result = JSObject()
                 result.put("ok", true)
-                result.put("activated", activated)
-                result.put("mac", mac)
-                result.put("currentIp", curIp)
-                result.put("currentMask", curMask)
-                result.put("interfaceId", interfaceId)
-                activity.runOnUiThread { call.resolve(result) }
-
-            } catch (e: SocketTimeoutException) {
-                postError(call, "La cámara no respondió a tiempo. Verificá que el teléfono esté conectado a su red.")
-            } catch (e: IOException) {
-                postError(call, "No se pudo conectar con la cámara en $accessIp: ${e.message}")
+                result.put("activated", secured.activated)
+                result.put("mac", secured.mac)
+                result.put("currentIp", secured.currentIp)
+                result.put("currentMask", secured.currentMask)
+                call.resolve(result)
             } catch (e: Exception) {
-                postError(call, "Error inesperado: ${e.message}")
+                unbindNetwork()
+                call.reject(e.message ?: "Error al comunicarse con la cámara.")
             }
-        }.start()
+        }
     }
 
     @PluginMethod
     fun applyNetwork(call: PluginCall) {
         val accessIp = call.getString("accessIp") ?: return call.reject("Falta accessIp")
+        val deviceName = call.getString("deviceName")
         val targetIp = call.getString("targetIp") ?: return call.reject("Falta targetIp")
         val targetMask = call.getString("targetMask") ?: return call.reject("Falta targetMask")
         val targetGateway = call.getString("targetGateway") ?: ""
 
-        val session = sessions[accessIp]
+        val auto = automation
             ?: return call.reject("Primero ejecutá el paso de credenciales (readAndSecure) para esta cámara.")
 
-        Thread {
+        scope.launch {
+            val result = JSObject()
             try {
-                val gwXml = if (targetGateway.isNotBlank())
-                    "<DefaultGateway><ipAddress>${escapeXml(targetGateway)}</ipAddress></DefaultGateway>" else ""
-
-                val body = """<?xml version="1.0" encoding="UTF-8"?>
-                    |<NetworkInterface xmlns="http://www.isapi.org/ver20/XMLSchema">
-                    |<id>${session.interfaceId}</id>
-                    |<IPAddress>
-                    |<ipVersion>v4</ipVersion>
-                    |<addressingType>static</addressingType>
-                    |<ipAddress>${escapeXml(targetIp)}</ipAddress>
-                    |<subnetMask>${escapeXml(targetMask)}</subnetMask>
-                    |$gwXml
-                    |</IPAddress>
-                    |</NetworkInterface>""".trimMargin()
-
-                val resp = session.client.requestAuth(
-                    "PUT", "/ISAPI/System/Network/interfaces/${session.interfaceId}",
-                    session.user, session.pass, body
-                )
-
-                sessions.remove(accessIp) // la IP cambió: la sesión ya no es válida a esta dirección
-
-                val result = JSObject()
-                if (resp.code in 200..299) {
-                    result.put("ok", true)
-                    result.put("probablySucceeded", false)
-                } else {
-                    result.put("ok", false)
-                    result.put("message", "No se pudo aplicar la red (${HikvisionIsapiClient.describeIsapiError(resp)}).")
-                }
-                activity.runOnUiThread { call.resolve(result) }
-
-            } catch (e: SocketTimeoutException) {
-                // Esperado: la cámara cambia de IP a mitad de la respuesta y corta la conexión.
-                sessions.remove(accessIp)
-                val result = JSObject()
+                auto.applyNetwork(accessIp, deviceName, targetIp, targetMask, targetGateway)
                 result.put("ok", true)
                 result.put("probablySucceeded", true)
-                activity.runOnUiThread { call.resolve(result) }
+                call.resolve(result)
             } catch (e: Exception) {
-                postError(call, "Error al aplicar la red: ${e.message}")
+                result.put("ok", false)
+                result.put("message", e.message ?: "No se pudo aplicar la configuración de red.")
+                call.resolve(result)
+            } finally {
+                automation = null
+                unbindNetwork()
             }
-        }.start()
+        }
     }
-
-    private fun postError(call: PluginCall, message: String) {
-        activity.runOnUiThread { call.reject(message) }
-    }
-
-    private fun escapeXml(s: String): String =
-        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            .replace("\"", "&quot;").replace("'", "&apos;")
 }

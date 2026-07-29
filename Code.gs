@@ -211,7 +211,11 @@ function doPost(e) {
 
 function handleSave(data) {
   if (!data.nombre || !data.nombre.trim()) throw new Error('Falta el nombre del dispositivo.');
-  if (!data.serial  || !data.serial.trim())  throw new Error('El Serial Number es obligatorio.');
+  // El Serial es obligatorio salvo cuando se está limpiando explícitamente
+  // (un serial se movió a otro dispositivo y hay que quitarlo de este).
+  if (!data.allowEmptySerial && (!data.serial || !data.serial.trim())) {
+    throw new Error('El Serial Number es obligatorio.');
+  }
 
   const sheet = getSheet();
   const { headers, nombreCol, serialCol, estadoCol } = getSchema(sheet);
