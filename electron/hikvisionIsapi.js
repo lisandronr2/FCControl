@@ -390,4 +390,11 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
   }
 }
 
-module.exports = { readAndSecure, applyNetwork };
+// Usado por el auto-actualizador: no forzar un quitAndInstall mientras hay
+// una cámara a mitad de configurar (dejaría la cámara en un estado a medio
+// aplicar si se corta la ventana de automatización de golpe).
+function hasActiveSession() {
+  return sessions.size > 0;
+}
+
+module.exports = { readAndSecure, applyNetwork, hasActiveSession };
