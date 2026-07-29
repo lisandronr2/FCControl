@@ -423,6 +423,9 @@ html, body {
   background: var(--paper); border-radius: 8px; padding: 9px 10px;
 }
 .data-cell.full { grid-column: 1 / -1; }
+.data-cell.captured { background: #E0F3EB; }
+.data-cell.captured .dc-key { color: #1C6B3A; }
+.data-cell.captured .dc-val { color: #1C6B3A; }
 .dc-key {
   font-size: 10px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .05em; color: var(--gray);
@@ -879,7 +882,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.5</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -1732,8 +1735,12 @@ async function loadDevice(nombre){
 /* ════ Renderizar ficha ═══════════════════════════════════════ */
 
 // Columnas que NO se muestran en el grid de datos
-// (NOMBRE se muestra en el header; SERIAL se edita; FECHA/TECNICO se actualizan solos)
-const SKIP_IN_GRID = new Set(['NOMBRE','SERIAL','SERIAL NUMBER','FECHA','DATE','UPDATED','TECNICO','TÉCNICO','VERIFIED BY','ESTADO','STATUS']);
+// (NOMBRE se muestra en el header; FECHA/TECNICO se actualizan solos).
+// SERIAL y MAC se tratan aparte más abajo: se editan en "Captura de
+// campo", pero si ya están capturados también se muestran acá como
+// información — así el técnico los ve sin tener que bajar a buscarlos.
+const SKIP_IN_GRID = new Set(['NOMBRE','FECHA','DATE','UPDATED','TECNICO','TÉCNICO','VERIFIED BY','ESTADO','STATUS']);
+const SERIAL_MAC_HEADERS = new Set(['SERIAL','SERIAL NUMBER','MAC','MAC ADDRESS']);
 // Columnas que usan fuente normal (no mono)
 const TEXT_COLS = new Set(['MODELO','MODEL','UBICACION','UBICACIÓN','LOCATION','ZONA','ZONE','TIPO','TYPE','DEVICE TYPE','ESTADO','STATUS','COMMENTS','NOTAS']);
 // Columnas que ocupan ancho completo
@@ -1829,10 +1836,17 @@ function renderCard(nombre, record, headers, estadoOptions){
 
   orderedHeaders.forEach(h => {
     const upper = h.toUpperCase().trim();
-    if (SKIP_IN_GRID.has(upper)) return;
-    const val  = record[h] || '';
+    const val  = (record[h] || '').toString().trim();
+    if (SERIAL_MAC_HEADERS.has(upper)){
+      // Solo se muestran acá si ya están capturados — si no, se cargan
+      // más abajo en "Captura de campo" y no hace falta duplicarlos vacíos.
+      if (!val || val.toUpperCase().includes('PENDING')) return;
+    } else if (SKIP_IN_GRID.has(upper)) {
+      return;
+    }
     const cell = document.createElement('div');
-    cell.className = 'data-cell' + (FULL_COLS.has(upper) ? ' full' : '');
+    const isCaptured = SERIAL_MAC_HEADERS.has(upper);
+    cell.className = 'data-cell' + (FULL_COLS.has(upper) ? ' full' : '') + (isCaptured ? ' captured' : '');
     const isText = TEXT_COLS.has(upper);
     cell.innerHTML =
       '<div class="dc-key">' + displayLabel(h) + '</div>' +
