@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 const hikvision = require('./hikvisionIsapi');
 const { autoUpdater } = require('electron-updater');
 
@@ -47,23 +48,50 @@ function cleanUpdaterCache() {
   }
 }
 
-// Causa real confirmada de "se queda colgada" (captura del usuario): el
-// instalador NSIS muestra "No se puede cerrar FCControl" porque chequea
-// casi al instante si el .exe sigue vivo, pero electron-updater lo lanza
-// ANTES de que Electron termine de liberar el proceso viejo — pierde esa
-// carrera casi siempre. isSilent solo suprime el asistente visual, NO este
-// chequeo de seguridad, así que no alcanzaba con instalar "silencioso".
+// Causa real confirmada con evidencia (captura + prueba con Kaspersky
+// pausado, que descartó al antivirus): electron-updater's quitAndInstall()
+// lanza el instalador y RECIÉN EN EL TICK SIGUIENTE llama a app.quit() —
+// no hay ninguna espera real entre ambas cosas. El instalador arranca
+// mientras nuestro proceso todavía está 100% vivo, así que su chequeo de
+// "¿sigue corriendo FCControl?" lo detecta SIEMPRE, sin importar cuántas
+// veces se reintente (no es una carrera de probabilidad, es un orden
+// garantizado). Un delay antes de llamar a quitAndInstall no sirve de
+// nada porque el problema está DESPUÉS de esa llamada, no antes.
 //
-// La solución: destruir todas las ventanas nosotros mismos (no esperar el
-// cierre "prolijo" de Electron, que puede demorar) y darle a Windows un
-// margen real antes de siquiera lanzar el instalador.
+// La única forma real de evitarlo es desacoplar el lanzamiento del
+// instalador de nuestro propio proceso: un ayudante de línea de comandos
+// independiente (cmd /c ping ... & start ...) espera unos segundos y
+// recién ahí lanza el instalador, mientras nosotros salimos con
+// app.exit() — mucho más duro e inmediato que app.quit() — apenas lo
+// dejamos en marcha. Para cuando el instalador arranca, nuestro proceso
+// lleva varios segundos muerto.
 function beginSilentInstall() {
   if (installingUpdate) return;
   installingUpdate = true;
+
+  const installerPath = autoUpdater.installerPath;
+  if (!installerPath) {
+    // No debería pasar (update-downloaded ya garantiza que el archivo
+    // existe), pero si pasa, mejor esto que no instalar nunca.
+    autoUpdater.quitAndInstall(true, true);
+    return;
+  }
+
+  try {
+    const helper = spawn(
+      'cmd.exe',
+      ['/c', `ping -n 6 127.0.0.1 >nul & start "" "${installerPath}" --updated /S --force-run`],
+      { detached: true, stdio: 'ignore', windowsHide: true }
+    );
+    helper.unref();
+  } catch (e) {
+    console.log('[autoUpdater] no se pudo lanzar el instalador desacoplado, uso el flujo normal:', e.message);
+    autoUpdater.quitAndInstall(true, true);
+    return;
+  }
+
   BrowserWindow.getAllWindows().forEach(w => { try { w.destroy(); } catch (e) {} });
-  setTimeout(() => {
-    autoUpdater.quitAndInstall(/* isSilent */ true, /* isForceRunAfter */ true);
-  }, 3000);
+  app.exit(0);
 }
 
 // No se instala mientras hay una cámara a mitad de configurar (dejaría la
