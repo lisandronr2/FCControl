@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { spawn } = require('child_process');
 const hikvision = require('./hikvisionIsapi');
 const { autoUpdater } = require('electron-updater');
@@ -78,11 +79,16 @@ function beginSilentInstall() {
   }
 
   try {
-    const helper = spawn(
-      'cmd.exe',
-      ['/c', `ping -n 6 127.0.0.1 >nul & start "" "${installerPath}" --updated /S --force-run`],
-      { detached: true, stdio: 'ignore', windowsHide: true }
-    );
+    // windowsHide de Node no es confiable para ocultar la consola de
+    // cmd.exe en todas las versiones de Windows (confirmado: se veía una
+    // ventana de "ping" real al abrir la app) — el método robusto es
+    // delegar el lanzamiento a WScript.Shell.Run con windowStyle=0, que sí
+    // garantiza que no se muestre ninguna ventana.
+    const cmdLine = `cmd /c ping -n 6 127.0.0.1 >nul & start "" "${installerPath}" --updated /S --force-run`;
+    const vbsPath = path.join(os.tmpdir(), `fcc-update-${Date.now()}.vbs`);
+    fs.writeFileSync(vbsPath, `CreateObject("WScript.Shell").Run "${cmdLine.replace(/"/g, '""')}", 0, False`, 'utf8');
+
+    const helper = spawn('wscript.exe', ['//B', vbsPath], { detached: true, stdio: 'ignore', windowsHide: true });
     helper.unref();
   } catch (e) {
     console.log('[autoUpdater] no se pudo lanzar el instalador desacoplado, uso el flujo normal:', e.message);
