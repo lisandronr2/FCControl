@@ -1,8 +1,6 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
-const { spawn } = require('child_process');
 const hikvision = require('./hikvisionIsapi');
 const { autoUpdater } = require('electron-updater');
 
@@ -49,73 +47,24 @@ function cleanUpdaterCache() {
   }
 }
 
-// Causa real confirmada con evidencia (captura + prueba con Kaspersky
-// pausado, que descartó al antivirus): electron-updater's quitAndInstall()
-// lanza el instalador y RECIÉN EN EL TICK SIGUIENTE llama a app.quit() —
-// no hay ninguna espera real entre ambas cosas. El instalador arranca
-// mientras nuestro proceso todavía está 100% vivo, así que su chequeo de
-// "¿sigue corriendo FCControl?" lo detecta SIEMPRE, sin importar cuántas
-// veces se reintente (no es una carrera de probabilidad, es un orden
-// garantizado). Un delay antes de llamar a quitAndInstall no sirve de
-// nada porque el problema está DESPUÉS de esa llamada, no antes.
-//
-// La única forma real de evitarlo es desacoplar el lanzamiento del
-// instalador de nuestro propio proceso: un ayudante de línea de comandos
-// independiente (cmd /c ping ... & start ...) espera unos segundos y
-// recién ahí lanza el instalador, mientras nosotros salimos con
-// app.exit() — mucho más duro e inmediato que app.quit() — apenas lo
-// dejamos en marcha. Para cuando el instalador arranca, nuestro proceso
-// lleva varios segundos muerto.
+// Historia de este método (para no volver a probar lo mismo si esto se
+// rompe de nuevo): primero se intentó un delay antes de quitAndInstall —
+// no servía, porque electron-updater lanza el instalador y llama a
+// app.quit() casi en el mismo tick, sin espera real entre ambas cosas.
+// Después se intentó desacoplar el lanzamiento con un helper propio
+// (wscript + cmd + start) para sobrevivir al cierre de la app — tampoco
+// funcionó: confirmado en la práctica que el proceso "hijo" no sobrevivía
+// al app.exit() (probablemente por cómo Windows mata en cascada los
+// procesos de un mismo Job Object, algo que Electron no permite evitar
+// desde JS). La solución real terminó siendo otra: arreglar el problema
+// del lado del instalador (ver build/installer.nsh, customCheckAppRunning)
+// para que tolere que el proceso viejo tarde unos segundos en cerrarse —
+// con eso ya no hace falta ningún truco acá, alcanza con el mecanismo
+// estándar de la librería.
 function beginSilentInstall() {
   if (installingUpdate) return;
   installingUpdate = true;
-
-  const installerPath = autoUpdater.installerPath;
-  if (!installerPath) {
-    // No debería pasar (update-downloaded ya garantiza que el archivo
-    // existe), pero si pasa, mejor esto que no instalar nunca.
-    autoUpdater.quitAndInstall(true, true);
-    return;
-  }
-
-  try {
-    // Log persistente (no por sesión) para poder diagnosticar sin depender
-    // de capturas de pantalla del técnico si esto vuelve a fallar — el
-    // historial de intentos previos se conserva (append).
-    const logPath = path.join(os.tmpdir(), 'fcc_update_log.txt');
-    const batPath = path.join(os.tmpdir(), 'fcc-update-helper.bat');
-    const batContent = [
-      '@echo off',
-      `echo %date% %time% - esperando antes de instalar >> "${logPath}"`,
-      'ping -n 6 127.0.0.1 >nul',
-      `if exist "${installerPath}" (`,
-      `  echo %date% %time% - instalador encontrado, lanzando >> "${logPath}"`,
-      `  start "" "${installerPath}" --updated /S --force-run`,
-      `  echo %date% %time% - start ejecutado >> "${logPath}"`,
-      `) else (`,
-      `  echo %date% %time% - ERROR: no se encontro el instalador en ${installerPath} >> "${logPath}"`,
-      `)`
-    ].join('\r\n');
-    fs.writeFileSync(batPath, batContent, 'utf8');
-
-    // windowsHide de Node no es confiable para ocultar la consola de
-    // cmd.exe en todas las versiones de Windows (confirmado: se veía una
-    // ventana de "ping" real al abrir la app) — el método robusto es
-    // delegar el lanzamiento a WScript.Shell.Run con windowStyle=0, que sí
-    // garantiza que no se muestre ninguna ventana.
-    const vbsPath = path.join(os.tmpdir(), `fcc-update-${Date.now()}.vbs`);
-    fs.writeFileSync(vbsPath, `CreateObject("WScript.Shell").Run """${batPath}""", 0, False`, 'utf8');
-
-    const helper = spawn('wscript.exe', ['//B', vbsPath], { detached: true, stdio: 'ignore', windowsHide: true });
-    helper.unref();
-  } catch (e) {
-    console.log('[autoUpdater] no se pudo lanzar el instalador desacoplado, uso el flujo normal:', e.message);
-    autoUpdater.quitAndInstall(true, true);
-    return;
-  }
-
-  BrowserWindow.getAllWindows().forEach(w => { try { w.destroy(); } catch (e) {} });
-  app.exit(0);
+  autoUpdater.quitAndInstall(/* isSilent */ true, /* isForceRunAfter */ true);
 }
 
 // No se instala mientras hay una cámara a mitad de configurar (dejaría la
@@ -176,10 +125,8 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  // Si estamos en medio de nuestra propia secuencia de instalación, las
-  // ventanas las destruimos nosotros a propósito — no dispararle un
-  // app.quit() de más acá, ya nos encargamos del quit real en
-  // beginSilentInstall() después del margen de espera.
+  // Si esto se disparó porque quitAndInstall() ya está cerrando todo, no
+  // hace falta (ni conviene) llamar a app.quit() de nuevo acá.
   if (installingUpdate) return;
   if (process.platform !== 'darwin') app.quit();
 });
