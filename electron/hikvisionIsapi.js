@@ -131,11 +131,6 @@ async function navigateAndWaitForPortal(win, accessIp, path) {
   }
 }
 
-async function clickNext(win) {
-  await exec(win, `(function(){ const btn = ${findButtonByTextJs('Siguiente')}; if (btn) btn.click(); })()`);
-  await new Promise(r => setTimeout(r, 1200));
-}
-
 // El asistente es lineal y de varios pasos: escribir la IP y avanzar UNA
 // vez a la siguiente pantalla no alcanza para que la cámara aplique nada
 // — confirmado contra hardware real (la contraseña, que se aplica desde
@@ -178,33 +173,102 @@ async function advanceWizardToFinish(win, maxSteps = 6) {
   return false;
 }
 
-// Pone el nombre OSD (superpuesto en la imagen) de la cámara para que
-// coincida con el nombre del dispositivo en FCControl. Asume que ya
-// estamos parados en el paso de "Ajustes OSD" del asistente (paso 3) —
-// solo completa el/los campo(s) de esta pantalla, no navega ni confirma
-// nada; el asistente entero se confirma UNA sola vez al final (ver
-// applyNetwork) porque el cambio de red demostró contra hardware real que
-// no se aplica hasta llegar al paso final y confirmarlo — abandonar el
-// asistente a mitad de camino (como hacía la versión anterior, en dos
-// pasadas separadas) no guarda nada, ni la red ni el nombre OSD.
-//
-// No tenemos visibilidad de la pantalla real de "Ajustes OSD" (no se pudo
-// probar contra hardware al escribir esto), así que la detección de campos
-// es defensiva: si no encuentra con certeza razonable qué escribir, falla
-// con un mensaje de diagnóstico en vez de arriesgarse a escribir en el
-// campo equivocado.
-async function fillOsdStep(win, deviceName) {
-  const onOsdStep = await waitFor(win, `
-    document.body.textContent.toUpperCase().includes('OSD') ||
-    document.body.textContent.toUpperCase().includes('SUPERPOSICI')
-  `, 5000);
-  if (!onOsdStep) {
+// Busca y clickea un elemento de menú/pestaña por su texto visible exacto
+// (los menús de este panel no son <button>, son <li>/<div>/<span> según la
+// pantalla) — prioriza el elemento más chico/específico que matchea, para
+// no clickear un contenedor grande que también contiene ese texto.
+function clickMenuTextJs(text) {
+  return `
+    (function(){
+      const target = ${JSON.stringify(text)};
+      const all = Array.from(document.querySelectorAll('li, div, span, a, button, .el-menu-item, .el-tabs__item, [role=tab]'));
+      const candidates = all.filter(el => el.textContent.trim() === target);
+      candidates.sort((a, b) => a.innerHTML.length - b.innerHTML.length);
+      const el = candidates[0];
+      if (el) { el.click(); return true; }
+      return false;
+    })()
+  `;
+}
+
+async function clickMenuText(win, text) {
+  return exec(win, clickMenuTextJs(text));
+}
+
+// Pone el nombre del dispositivo en Sistema → Información básica. A
+// diferencia del asistente rápido, esta es una pantalla de configuración
+// normal con su propio botón Guardar que aplica el cambio de inmediato
+// (mismo mecanismo que la contraseña, que sabemos que funciona) — no hace
+// falta pasar por ningún asistente de varios pasos para esto.
+async function setDeviceNameInSystemInfo(win, deviceName) {
+  if (!(await clickMenuText(win, 'Sistema'))) {
+    throw new Error('No se encontró el menú "Sistema" en el panel de la cámara.');
+  }
+  await new Promise(r => setTimeout(r, 800));
+  if (!(await clickMenuText(win, 'Información básica'))) {
+    throw new Error('No se encontró la pestaña "Información básica" dentro de Sistema.');
+  }
+  await new Promise(r => setTimeout(r, 800));
+
+  const onPage = await waitFor(win, `document.body.textContent.includes('Nombre de dispositivo')`, 5000);
+  if (!onPage) {
     const diag = await exec(win, `JSON.stringify({url: location.href, bodySnippet: document.body.textContent.slice(0,300)})`).catch(() => '{}');
-    throw new Error(`No se llegó a la pantalla de Ajustes OSD del asistente (${diag}).`);
+    throw new Error(`No se llegó a la pantalla de Información básica (${diag}).`);
   }
 
-  // ¿Cámara de dos canales? Buscamos pestañas/selectores con "1"/"2" o
-  // "Canal 1"/"Canal 2"/"CH1"/"CH2" cerca de los campos de nombre.
+  const set = await exec(win, `
+    (function(){
+      function setVal(el, val) {
+        if (!el) return false;
+        const proto = Object.getPrototypeOf(el);
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+        setter.call(el, val);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      }
+      const items = Array.from(document.querySelectorAll('.el-form-item'));
+      const item = items.find(it => {
+        const lbl = it.querySelector('label');
+        return lbl && lbl.textContent.includes('Nombre de dispositivo');
+      });
+      const input = item ? item.querySelector('input[type=text]') : null;
+      return setVal(input, ${JSON.stringify(deviceName)});
+    })()
+  `);
+  if (!set) throw new Error('No se encontró el campo "Nombre de dispositivo" en Información básica.');
+
+  await new Promise(r => setTimeout(r, 300));
+  const saved = await exec(win, `(function(){ const btn = ${findButtonByTextJs('Guardar')}; if (btn) { btn.click(); return true; } return false; })()`);
+  if (!saved) throw new Error('No se encontró el botón Guardar en Información básica.');
+  await new Promise(r => setTimeout(r, 1200));
+}
+
+// Pone el nombre OSD (superpuesto en la imagen, reemplazando "CAMERA") en
+// Imagen → Ajuste OSD → Nombre del Canal. Igual que Información básica,
+// es una pantalla de configuración normal con Guardar propio — no el
+// asistente rápido.
+async function setOsdChannelNames(win, deviceName) {
+  if (!(await clickMenuText(win, 'Imagen'))) {
+    throw new Error('No se encontró el menú "Imagen" en el panel de la cámara.');
+  }
+  await new Promise(r => setTimeout(r, 800));
+  if (!(await clickMenuText(win, 'Ajuste OSD'))) {
+    throw new Error('No se encontró la pestaña "Ajuste OSD" dentro de Imagen.');
+  }
+  await new Promise(r => setTimeout(r, 800));
+
+  const onPage = await waitFor(win, `
+    document.body.textContent.toUpperCase().includes('OSD') ||
+    document.body.textContent.toUpperCase().includes('NOMBRE DEL CANAL')
+  `, 5000);
+  if (!onPage) {
+    const diag = await exec(win, `JSON.stringify({url: location.href, bodySnippet: document.body.textContent.slice(0,300)})`).catch(() => '{}');
+    throw new Error(`No se llegó a la pantalla de Ajuste OSD (${diag}).`);
+  }
+
+  // ¿Cámara de dos canales? Buscamos pestañas/selectores "1"/"2" o
+  // "Canal 1"/"Canal 2"/"CH1"/"CH2".
   const channelTabsInfo = await exec(win, `
     (function(){
       const tabs = Array.from(document.querySelectorAll('.el-tabs__item, .el-radio, [role=tab]'));
@@ -213,30 +277,31 @@ async function fillOsdStep(win, deviceName) {
     })()
   `);
 
-  const setNameOnCurrentPanel = async (name) => {
-    return exec(win, `
-      (function(){
-        function setVal(el, val) {
-          if (!el) return false;
-          const proto = Object.getPrototypeOf(el);
-          const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-          setter.call(el, val);
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }
-        const items = Array.from(document.querySelectorAll('.el-form-item'));
-        const item = items.find(it => {
-          const lbl = it.querySelector('label');
-          if (!lbl) return false;
-          const t = lbl.textContent.toUpperCase();
-          return t.includes('NOMBRE') || t.includes('OSD') || t.includes('CANAL');
-        });
-        const input = item ? item.querySelector('input[type=text]') : null;
-        return setVal(input, ${JSON.stringify(name)});
-      })()
-    `);
-  };
+  const setChannelName = async (name) => exec(win, `
+    (function(){
+      function setVal(el, val) {
+        if (!el) return false;
+        const proto = Object.getPrototypeOf(el);
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+        setter.call(el, val);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      }
+      const items = Array.from(document.querySelectorAll('.el-form-item'));
+      let item = items.find(it => {
+        const lbl = it.querySelector('label');
+        return lbl && lbl.textContent.toUpperCase().includes('NOMBRE DEL CANAL');
+      });
+      let input = item ? item.querySelector('input[type=text]') : null;
+      if (!input) {
+        // Respaldo: cualquier input de texto cuyo valor actual sea "CAMERA"
+        input = Array.from(document.querySelectorAll('input[type=text]'))
+          .find(i => i.value && i.value.toUpperCase().includes('CAMERA'));
+      }
+      return setVal(input, ${JSON.stringify(name)});
+    })()
+  `);
 
   if (channelTabsInfo >= 2) {
     for (let ch = 1; ch <= 2; ch++) {
@@ -248,20 +313,23 @@ async function fillOsdStep(win, deviceName) {
           return false;
         })()
       `);
-      if (!clicked) throw new Error(`No se encontró la pestaña del canal ${ch} en Ajustes OSD.`);
+      if (!clicked) throw new Error(`No se encontró la pestaña del canal ${ch} en Ajuste OSD.`);
       await new Promise(r => setTimeout(r, 500));
-      const set = await setNameOnCurrentPanel(`${deviceName} 0${ch}`);
-      if (!set) throw new Error(`No se encontró el campo de nombre OSD para el canal ${ch}.`);
+      const set = await setChannelName(`${deviceName} 0${ch}`);
+      if (!set) throw new Error(`No se encontró el campo "Nombre del Canal" para el canal ${ch}.`);
     }
   } else {
-    const set = await setNameOnCurrentPanel(deviceName);
+    const set = await setChannelName(deviceName);
     if (!set) {
       const diag = await exec(win, `JSON.stringify(Array.from(document.querySelectorAll('.el-form-item label')).map(l => l.textContent.trim()))`).catch(() => '[]');
-      throw new Error(`No se encontró el campo de nombre OSD. Etiquetas visibles en esta pantalla: ${diag}`);
+      throw new Error(`No se encontró el campo "Nombre del Canal" en Ajuste OSD. Etiquetas visibles: ${diag}`);
     }
   }
 
   await new Promise(r => setTimeout(r, 300));
+  const saved = await exec(win, `(function(){ const btn = ${findButtonByTextJs('Guardar')}; if (btn) { btn.click(); return true; } return false; })()`);
+  if (!saved) throw new Error('No se encontró el botón Guardar en Ajuste OSD.');
+  await new Promise(r => setTimeout(r, 1200));
 }
 
 async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '12345', newPass }) {
@@ -327,13 +395,18 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
   const { win } = session;
 
   try {
-    // Un único recorrido continuo del asistente: red (paso 1) → hora (paso
-    // 2, sin tocar) → OSD (paso 3) → seguir hasta el paso final y
-    // confirmarlo. Antes esto se hacía en dos pasadas separadas (una para
-    // el nombre OSD, otra para la red), cada una abandonada a mitad del
-    // asistente — confirmado contra hardware real que así NO se aplica
-    // nada: el asistente solo guarda los cambios cuando se llega hasta el
-    // final y se confirma esa última pantalla.
+    // Orden confirmado por el técnico contra el panel real: primero el
+    // nombre del dispositivo (Sistema → Información básica) y el nombre
+    // OSD por canal (Imagen → Ajuste OSD, reemplazando "CAMERA") — ambas
+    // son pantallas de configuración normal con su propio Guardar que
+    // aplica al toque, nada que ver con el asistente rápido. Recién
+    // después, el asistente de red (que si es de varios pasos y solo
+    // guarda al llegar al final — ver advanceWizardToFinish).
+    if (deviceName) {
+      await setDeviceNameInSystemInfo(win, deviceName);
+      await setOsdChannelNames(win, deviceName);
+    }
+
     await navigateAndWaitForPortal(win, accessIp, '/doc/index.html#/wizard');
     const onWizard = await waitFor(win, `document.querySelector('.el-form-item') != null`, 6000);
     if (!onWizard) throw new Error('No se pudo llegar al asistente de configuración de la cámara.');
@@ -406,14 +479,9 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
     `);
     if (!ok) throw new Error('No se encontraron los campos de IP/máscara en el asistente.');
 
+    // El resto del asistente (hora, etc.) se deja sin tocar — avanza solo
+    // hasta encontrar el paso final y confirmarlo ahí.
     await new Promise(r => setTimeout(r, 500));
-    await clickNext(win); // paso 1 (red) → paso 2 (hora)
-    await clickNext(win); // paso 2 (hora, sin tocar) → paso 3 (OSD)
-
-    if (deviceName) {
-      await fillOsdStep(win, deviceName);
-    }
-
     const finished = await advanceWizardToFinish(win);
     if (!finished) {
       throw new Error('Se completaron los campos pero no se encontró el paso final del asistente para confirmarlos — la cámara puede no haber aplicado los cambios. Probá de nuevo o revisalo manualmente en el panel de la cámara.');

@@ -197,8 +197,158 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         }
     }
 
-    private suspend fun clickNext() {
-        exec("""(function(){ var btn = ${findButtonByTextJs("Siguiente")}; if (btn) btn.click(); })()""")
+    // Busca y clickea un elemento de menú/pestaña por su texto visible
+    // exacto (los menús de este panel no son <button>, son <li>/<div>/
+    // <span> según la pantalla) — prioriza el elemento más chico/específico
+    // que matchea, para no clickear un contenedor grande que también
+    // contiene ese texto.
+    private suspend fun clickMenuText(text: String): Boolean {
+        val js = """
+            (function(){
+              var target = ${jsStr(text)};
+              var all = Array.from(document.querySelectorAll('li, div, span, a, button, .el-menu-item, .el-tabs__item, [role=tab]'));
+              var candidates = all.filter(function(el){ return el.textContent.trim() === target; });
+              candidates.sort(function(a, b){ return a.innerHTML.length - b.innerHTML.length; });
+              var el = candidates[0];
+              if (el) { el.click(); return true; }
+              return false;
+            })()
+        """.trimIndent()
+        return exec(js) == "true"
+    }
+
+    // Pone el nombre del dispositivo en Sistema → Información básica. A
+    // diferencia del asistente rápido, esta es una pantalla de
+    // configuración normal con su propio botón Guardar que aplica el
+    // cambio de inmediato (mismo mecanismo que la contraseña, que sabemos
+    // que funciona) — no hace falta ningún asistente de varios pasos.
+    private suspend fun setDeviceNameInSystemInfo(deviceName: String) {
+        if (!clickMenuText("Sistema")) {
+            throw PortalAutomationException("No se encontró el menú \"Sistema\" en el panel de la cámara.")
+        }
+        delay(800)
+        if (!clickMenuText("Información básica")) {
+            throw PortalAutomationException("No se encontró la pestaña \"Información básica\" dentro de Sistema.")
+        }
+        delay(800)
+
+        if (!waitFor("document.body.textContent.includes('Nombre de dispositivo')", 5000)) {
+            val diag = try {
+                exec("JSON.stringify({url: location.href, bodySnippet: document.body.textContent.slice(0,300)})")
+            } catch (e: Exception) { "{}" }
+            throw PortalAutomationException("No se llegó a la pantalla de Información básica ($diag).")
+        }
+
+        val set = exec(
+            """
+            (function(){
+              $setValFn
+              var items = Array.from(document.querySelectorAll('.el-form-item'));
+              var item = items.find(function(it){
+                var lbl = it.querySelector('label');
+                return lbl && lbl.textContent.includes('Nombre de dispositivo');
+              });
+              var input = item ? item.querySelector('input[type=text]') : null;
+              return setVal(input, ${jsStr(deviceName)});
+            })()
+            """.trimIndent()
+        ) == "true"
+        if (!set) throw PortalAutomationException("No se encontró el campo \"Nombre de dispositivo\" en Información básica.")
+
+        delay(300)
+        val saved = exec("""(function(){ var btn = ${findButtonByTextJs("Guardar")}; if (btn) { btn.click(); return true; } return false; })()""") == "true"
+        if (!saved) throw PortalAutomationException("No se encontró el botón Guardar en Información básica.")
+        delay(1200)
+    }
+
+    // Pone el nombre OSD (superpuesto en la imagen, reemplazando "CAMERA")
+    // en Imagen → Ajuste OSD → Nombre del Canal. Misma lógica que
+    // Información básica: pantalla normal con Guardar propio.
+    private suspend fun setOsdChannelNames(deviceName: String) {
+        if (!clickMenuText("Imagen")) {
+            throw PortalAutomationException("No se encontró el menú \"Imagen\" en el panel de la cámara.")
+        }
+        delay(800)
+        if (!clickMenuText("Ajuste OSD")) {
+            throw PortalAutomationException("No se encontró la pestaña \"Ajuste OSD\" dentro de Imagen.")
+        }
+        delay(800)
+
+        val onPage = waitFor(
+            """
+            document.body.textContent.toUpperCase().includes('OSD') ||
+            document.body.textContent.toUpperCase().includes('NOMBRE DEL CANAL')
+            """.trimIndent(),
+            5000
+        )
+        if (!onPage) {
+            val diag = try {
+                exec("JSON.stringify({url: location.href, bodySnippet: document.body.textContent.slice(0,300)})")
+            } catch (e: Exception) { "{}" }
+            throw PortalAutomationException("No se llegó a la pantalla de Ajuste OSD ($diag).")
+        }
+
+        val channelTabsInfo = exec(
+            """
+            (function(){
+              var tabs = Array.from(document.querySelectorAll('.el-tabs__item, .el-radio, [role=tab]'));
+              var chTabs = tabs.filter(function(t){ return /^(canal\s*)?[12]${'$'}|^ch\s*[12]${'$'}/i.test(t.textContent.trim()); });
+              return chTabs.length;
+            })()
+            """.trimIndent()
+        ).toIntOrNull() ?: 0
+
+        suspend fun setChannelName(name: String): Boolean {
+            val js = """
+                (function(){
+                  $setValFn
+                  var items = Array.from(document.querySelectorAll('.el-form-item'));
+                  var item = items.find(function(it){
+                    var lbl = it.querySelector('label');
+                    return lbl && lbl.textContent.toUpperCase().includes('NOMBRE DEL CANAL');
+                  });
+                  var input = item ? item.querySelector('input[type=text]') : null;
+                  if (!input) {
+                    input = Array.from(document.querySelectorAll('input[type=text]'))
+                      .find(function(i){ return i.value && i.value.toUpperCase().includes('CAMERA'); });
+                  }
+                  return setVal(input, ${jsStr(name)});
+                })()
+            """.trimIndent()
+            return exec(js) == "true"
+        }
+
+        if (channelTabsInfo >= 2) {
+            for (ch in 1..2) {
+                val clickJs = """
+                    (function(){
+                      var tabs = Array.from(document.querySelectorAll('.el-tabs__item, .el-radio, [role=tab]'));
+                      var re = new RegExp('^(canal\\s*)?$ch${'$'}|^ch\\s*$ch${'$'}', 'i');
+                      var tab = tabs.find(function(t){ return re.test(t.textContent.trim()); });
+                      if (tab) { tab.click(); return true; }
+                      return false;
+                    })()
+                """.trimIndent()
+                if (exec(clickJs) != "true") {
+                    throw PortalAutomationException("No se encontró la pestaña del canal $ch en Ajuste OSD.")
+                }
+                delay(500)
+                if (!setChannelName("$deviceName 0$ch")) {
+                    throw PortalAutomationException("No se encontró el campo \"Nombre del Canal\" para el canal $ch.")
+                }
+            }
+        } else {
+            if (!setChannelName(deviceName)) {
+                val diag = try {
+                    exec("JSON.stringify(Array.from(document.querySelectorAll('.el-form-item label')).map(function(l){return l.textContent.trim();}))")
+                } catch (e: Exception) { "[]" }
+                throw PortalAutomationException("No se encontró el campo \"Nombre del Canal\" en Ajuste OSD. Etiquetas visibles: $diag")
+            }
+        }
+
+        delay(300)
+        val saved = exec("""(function(){ var btn = ${findButtonByTextJs("Guardar")}; if (btn) { btn.click(); return true; } return false; })()""") == "true"
+        if (!saved) throw PortalAutomationException("No se encontró el botón Guardar en Ajuste OSD.")
         delay(1200)
     }
 
@@ -239,88 +389,6 @@ class HikvisionPortalAutomation(private val activity: Activity) {
             delay(1200)
         }
         return false
-    }
-
-    // Completa el nombre OSD (superpuesto en la imagen) para que coincida
-    // con el nombre del dispositivo en FCControl. Asume que ya estamos
-    // parados en el paso de "Ajustes OSD" del asistente (paso 3) — solo
-    // completa el/los campo(s) de esta pantalla, no navega ni confirma
-    // nada; el asistente entero se confirma UNA sola vez al final (ver
-    // applyNetwork), porque abandonarlo a mitad de camino no guarda nada.
-    private suspend fun fillOsdStep(deviceName: String) {
-        val onOsdStep = waitFor(
-            """
-            document.body.textContent.toUpperCase().includes('OSD') ||
-            document.body.textContent.toUpperCase().includes('SUPERPOSICI')
-            """.trimIndent(),
-            5000
-        )
-        if (!onOsdStep) {
-            val diag = try {
-                exec("JSON.stringify({url: location.href, bodySnippet: document.body.textContent.slice(0,300)})")
-            } catch (e: Exception) { "{}" }
-            throw PortalAutomationException("No se llegó a la pantalla de Ajustes OSD del asistente ($diag).")
-        }
-
-        // ¿Cámara de dos canales? Buscamos pestañas/selectores "1"/"2" o
-        // "Canal 1"/"Canal 2"/"CH1"/"CH2".
-        val channelTabsInfo = exec(
-            """
-            (function(){
-              var tabs = Array.from(document.querySelectorAll('.el-tabs__item, .el-radio, [role=tab]'));
-              var chTabs = tabs.filter(function(t){ return /^(canal\s*)?[12]${'$'}|^ch\s*[12]${'$'}/i.test(t.textContent.trim()); });
-              return chTabs.length;
-            })()
-            """.trimIndent()
-        ).toIntOrNull() ?: 0
-
-        suspend fun setNameOnCurrentPanel(name: String): Boolean {
-            val js = """
-                (function(){
-                  $setValFn
-                  var items = Array.from(document.querySelectorAll('.el-form-item'));
-                  var item = items.find(function(it){
-                    var lbl = it.querySelector('label');
-                    if (!lbl) return false;
-                    var t = lbl.textContent.toUpperCase();
-                    return t.includes('NOMBRE') || t.includes('OSD') || t.includes('CANAL');
-                  });
-                  var input = item ? item.querySelector('input[type=text]') : null;
-                  return setVal(input, ${jsStr(name)});
-                })()
-            """.trimIndent()
-            return exec(js) == "true"
-        }
-
-        if (channelTabsInfo >= 2) {
-            for (ch in 1..2) {
-                val clickJs = """
-                    (function(){
-                      var tabs = Array.from(document.querySelectorAll('.el-tabs__item, .el-radio, [role=tab]'));
-                      var re = new RegExp('^(canal\\s*)?$ch${'$'}|^ch\\s*$ch${'$'}', 'i');
-                      var tab = tabs.find(function(t){ return re.test(t.textContent.trim()); });
-                      if (tab) { tab.click(); return true; }
-                      return false;
-                    })()
-                """.trimIndent()
-                if (exec(clickJs) != "true") {
-                    throw PortalAutomationException("No se encontró la pestaña del canal $ch en Ajustes OSD.")
-                }
-                delay(500)
-                if (!setNameOnCurrentPanel("$deviceName 0$ch")) {
-                    throw PortalAutomationException("No se encontró el campo de nombre OSD para el canal $ch.")
-                }
-            }
-        } else {
-            if (!setNameOnCurrentPanel(deviceName)) {
-                val diag = try {
-                    exec("JSON.stringify(Array.from(document.querySelectorAll('.el-form-item label')).map(function(l){return l.textContent.trim();}))")
-                } catch (e: Exception) { "[]" }
-                throw PortalAutomationException("No se encontró el campo de nombre OSD. Etiquetas visibles en esta pantalla: $diag")
-            }
-        }
-
-        delay(300)
     }
 
     suspend fun readAndSecure(accessIp: String, currentUser: String, currentPass: String, newPass: String): SecureResult {
@@ -368,11 +436,18 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         if (webView == null) throw PortalAutomationException("Primero ejecutá el paso de credenciales (readAndSecure) para esta cámara.")
 
         try {
-            // Un único recorrido continuo del asistente: red (paso 1) → hora
-            // (paso 2, sin tocar) → OSD (paso 3) → seguir hasta el paso
-            // final y confirmarlo. Antes esto se hacía en dos pasadas
-            // separadas, cada una abandonada a mitad del asistente —
-            // confirmado contra hardware real que así NO se aplica nada.
+            // Orden confirmado por el técnico contra el panel real: primero
+            // el nombre del dispositivo (Sistema → Información básica) y el
+            // nombre OSD por canal (Imagen → Ajuste OSD, reemplazando
+            // "CAMERA") — ambas son pantallas de configuración normal con
+            // su propio Guardar que aplica al toque, nada que ver con el
+            // asistente rápido. Recién después, el asistente de red (que sí
+            // es de varios pasos y solo guarda al llegar al final).
+            if (!deviceName.isNullOrBlank()) {
+                setDeviceNameInSystemInfo(deviceName)
+                setOsdChannelNames(deviceName)
+            }
+
             navigateAndWaitForPortal(accessIp, "/doc/index.html#/wizard")
             if (!waitFor("document.querySelector('.el-form-item') != null", 6000)) {
                 throw PortalAutomationException("No se pudo llegar al asistente de configuración de la cámara.")
@@ -440,14 +515,9 @@ class HikvisionPortalAutomation(private val activity: Activity) {
             ) == "true"
             if (!ok) throw PortalAutomationException("No se encontraron los campos de IP/máscara en el asistente.")
 
+            // El resto del asistente (hora, etc.) se deja sin tocar —
+            // avanza solo hasta encontrar el paso final y confirmarlo ahí.
             delay(500)
-            clickNext() // paso 1 (red) → paso 2 (hora)
-            clickNext() // paso 2 (hora, sin tocar) → paso 3 (OSD)
-
-            if (!deviceName.isNullOrBlank()) {
-                fillOsdStep(deviceName)
-            }
-
             val finished = advanceWizardToFinish()
             if (!finished) {
                 throw PortalAutomationException("Se completaron los campos pero no se encontró el paso final del asistente para confirmarlos — la cámara puede no haber aplicado los cambios. Probá de nuevo o revisalo manualmente en el panel de la cámara.")
