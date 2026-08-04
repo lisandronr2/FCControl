@@ -136,26 +136,64 @@ async function clickNext(win) {
   await new Promise(r => setTimeout(r, 1200));
 }
 
+// El asistente es lineal y de varios pasos: escribir la IP y avanzar UNA
+// vez a la siguiente pantalla no alcanza para que la cámara aplique nada
+// — confirmado contra hardware real (la contraseña, que se aplica desde
+// una pantalla de acción directa, sí quedó puesta; la IP, completada a
+// mitad del asistente y luego abandonada, no). Hay que llegar hasta el
+// paso final del asistente y confirmarlo ahí. Como no sabemos de
+// antemano cuántos pasos quedan ni la etiqueta exacta del botón
+// final, se sigue avanzando y buscando en cada pantalla un botón de
+// cierre; si no aparece ninguno tras varios pasos, se lo reporta como
+// no confirmado en vez de asumir que se aplicó igual.
+async function advanceWizardToFinish(win, maxSteps = 6) {
+  const FINISH_WORDS = ['Finalizar', 'Completar', 'Terminar', 'Guardar', 'Aplicar', 'Confirmar'];
+  for (let step = 0; step < maxSteps; step++) {
+    const clickedFinish = await exec(win, `
+      (function(){
+        const words = ${JSON.stringify(FINISH_WORDS)};
+        const btn = Array.from(document.querySelectorAll('button')).find(b => {
+          const t = b.textContent.trim();
+          return words.some(w => t.includes(w));
+        });
+        if (btn) { btn.click(); return true; }
+        return false;
+      })()
+    `);
+    if (clickedFinish) {
+      await new Promise(r => setTimeout(r, 1500));
+      return true;
+    }
+
+    const clickedNext = await exec(win, `
+      (function(){
+        const btn = ${findButtonByTextJs('Siguiente')};
+        if (btn) { btn.click(); return true; }
+        return false;
+      })()
+    `);
+    if (!clickedNext) return false; // no hay más botones para avanzar
+    await new Promise(r => setTimeout(r, 1200));
+  }
+  return false;
+}
+
 // Pone el nombre OSD (superpuesto en la imagen) de la cámara para que
-// coincida con el nombre del dispositivo en FCControl. Esto se hace ANTES
-// de tocar la red (el técnico pidió ese orden explícitamente) recorriendo
-// el asistente desde el paso 1 sin modificar nada hasta llegar al paso de
-// OSD — así no se pisa ningún valor de red al pasar por ese paso.
+// coincida con el nombre del dispositivo en FCControl. Asume que ya
+// estamos parados en el paso de "Ajustes OSD" del asistente (paso 3) —
+// solo completa el/los campo(s) de esta pantalla, no navega ni confirma
+// nada; el asistente entero se confirma UNA sola vez al final (ver
+// applyNetwork) porque el cambio de red demostró contra hardware real que
+// no se aplica hasta llegar al paso final y confirmarlo — abandonar el
+// asistente a mitad de camino (como hacía la versión anterior, en dos
+// pasadas separadas) no guarda nada, ni la red ni el nombre OSD.
 //
 // No tenemos visibilidad de la pantalla real de "Ajustes OSD" (no se pudo
 // probar contra hardware al escribir esto), así que la detección de campos
 // es defensiva: si no encuentra con certeza razonable qué escribir, falla
 // con un mensaje de diagnóstico en vez de arriesgarse a escribir en el
 // campo equivocado.
-async function setOsdName(win, accessIp, deviceName) {
-  await navigateAndWaitForPortal(win, accessIp, '/doc/index.html#/wizard');
-  const onWizard = await waitFor(win, `document.querySelector('.el-form-item') != null`, 6000);
-  if (!onWizard) throw new Error('No se pudo llegar al asistente para configurar el nombre OSD.');
-
-  // Pasos 1 (red) y 2 (hora): avanzar sin tocar nada, para llegar al 3 (OSD)
-  await clickNext(win);
-  await clickNext(win);
-
+async function fillOsdStep(win, deviceName) {
   const onOsdStep = await waitFor(win, `
     document.body.textContent.toUpperCase().includes('OSD') ||
     document.body.textContent.toUpperCase().includes('SUPERPOSICI')
@@ -224,7 +262,6 @@ async function setOsdName(win, accessIp, deviceName) {
   }
 
   await new Promise(r => setTimeout(r, 300));
-  await clickNext(win);
 }
 
 async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '12345', newPass }) {
@@ -290,18 +327,16 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
   const { win } = session;
 
   try {
-    // Primero el nombre OSD (pedido explícito: antes de tocar la red),
-    // recorriendo el asistente entero desde el paso 1 sin modificarlo.
-    if (deviceName) {
-      await setOsdName(win, accessIp, deviceName);
-    }
-
-    // Segunda pasada por el asistente, esta vez para la red — se navega de
-    // nuevo desde el paso 1 porque el asistente es lineal y no se puede
-    // volver atrás desde el paso de OSD.
+    // Un único recorrido continuo del asistente: red (paso 1) → hora (paso
+    // 2, sin tocar) → OSD (paso 3) → seguir hasta el paso final y
+    // confirmarlo. Antes esto se hacía en dos pasadas separadas (una para
+    // el nombre OSD, otra para la red), cada una abandonada a mitad del
+    // asistente — confirmado contra hardware real que así NO se aplica
+    // nada: el asistente solo guarda los cambios cuando se llega hasta el
+    // final y se confirma esa última pantalla.
     await navigateAndWaitForPortal(win, accessIp, '/doc/index.html#/wizard');
     const onWizard = await waitFor(win, `document.querySelector('.el-form-item') != null`, 6000);
-    if (!onWizard) throw new Error('No se pudo llegar a la pantalla de ajustes de red del asistente.');
+    if (!onWizard) throw new Error('No se pudo llegar al asistente de configuración de la cámara.');
 
     // Si DHCP está activo hay que apagarlo antes de poder escribir una IP
     // fija — los switches/checkboxes de Element UI suelen ignorar el click
@@ -372,13 +407,18 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
     if (!ok) throw new Error('No se encontraron los campos de IP/máscara en el asistente.');
 
     await new Promise(r => setTimeout(r, 500));
-    await exec(win, `
-      (function(){
-        const btn = ${findButtonByTextJs('Siguiente')};
-        if (btn) btn.click();
-      })()
-    `);
-    await new Promise(r => setTimeout(r, 2500));
+    await clickNext(win); // paso 1 (red) → paso 2 (hora)
+    await clickNext(win); // paso 2 (hora, sin tocar) → paso 3 (OSD)
+
+    if (deviceName) {
+      await fillOsdStep(win, deviceName);
+    }
+
+    const finished = await advanceWizardToFinish(win);
+    if (!finished) {
+      throw new Error('Se completaron los campos pero no se encontró el paso final del asistente para confirmarlos — la cámara puede no haber aplicado los cambios. Probá de nuevo o revisalo manualmente en el panel de la cámara.');
+    }
+    await new Promise(r => setTimeout(r, 1500));
 
     sessions.delete(accessIp);
     win.destroy();

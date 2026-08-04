@@ -202,19 +202,52 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         delay(1200)
     }
 
-    // Pone el nombre OSD (superpuesto en la imagen) de la cámara para que
-    // coincida con el nombre del dispositivo en FCControl, ANTES de tocar la
-    // red (orden pedido explícitamente), recorriendo el asistente desde el
-    // paso 1 sin modificar nada hasta llegar al paso de OSD.
-    private suspend fun setOsdName(accessIp: String, deviceName: String) {
-        navigateAndWaitForPortal(accessIp, "/doc/index.html#/wizard")
-        if (!waitFor("document.querySelector('.el-form-item') != null", 6000)) {
-            throw PortalAutomationException("No se pudo llegar al asistente para configurar el nombre OSD.")
+    // El asistente es lineal y de varios pasos: escribir la IP y avanzar
+    // una vez a la siguiente pantalla no alcanza para que la cámara aplique
+    // nada — confirmado contra hardware real (la contraseña, que se aplica
+    // desde una pantalla de acción directa, sí quedó puesta; la IP,
+    // completada a mitad del asistente y luego abandonada, no). Hay que
+    // llegar hasta el paso final y confirmarlo ahí. Como no sabemos de
+    // antemano cuántos pasos quedan ni la etiqueta exacta del botón final,
+    // se sigue avanzando buscando en cada pantalla un botón de cierre; si
+    // no aparece ninguno tras varios pasos, se reporta como no confirmado
+    // en vez de asumir que se aplicó igual.
+    private suspend fun advanceWizardToFinish(maxSteps: Int = 6): Boolean {
+        val finishWords = listOf("Finalizar", "Completar", "Terminar", "Guardar", "Aplicar", "Confirmar")
+        repeat(maxSteps) {
+            val wordsJs = finishWords.joinToString(",") { w -> jsStr(w) }
+            val clickedFinish = exec(
+                """
+                (function(){
+                  var words = [$wordsJs];
+                  var btn = Array.from(document.querySelectorAll('button')).find(function(b){
+                    var t = b.textContent.trim();
+                    return words.some(function(w){ return t.includes(w); });
+                  });
+                  if (btn) { btn.click(); return true; }
+                  return false;
+                })()
+                """.trimIndent()
+            ) == "true"
+            if (clickedFinish) {
+                delay(1500)
+                return true
+            }
+
+            val clickedNext = exec("""(function(){ var btn = ${findButtonByTextJs("Siguiente")}; if (btn) { btn.click(); return true; } return false; })()""") == "true"
+            if (!clickedNext) return false
+            delay(1200)
         }
+        return false
+    }
 
-        clickNext() // paso 1 (red) sin tocar
-        clickNext() // paso 2 (hora) sin tocar
-
+    // Completa el nombre OSD (superpuesto en la imagen) para que coincida
+    // con el nombre del dispositivo en FCControl. Asume que ya estamos
+    // parados en el paso de "Ajustes OSD" del asistente (paso 3) — solo
+    // completa el/los campo(s) de esta pantalla, no navega ni confirma
+    // nada; el asistente entero se confirma UNA sola vez al final (ver
+    // applyNetwork), porque abandonarlo a mitad de camino no guarda nada.
+    private suspend fun fillOsdStep(deviceName: String) {
         val onOsdStep = waitFor(
             """
             document.body.textContent.toUpperCase().includes('OSD') ||
@@ -288,7 +321,6 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         }
 
         delay(300)
-        clickNext()
     }
 
     suspend fun readAndSecure(accessIp: String, currentUser: String, currentPass: String, newPass: String): SecureResult {
@@ -336,13 +368,14 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         if (webView == null) throw PortalAutomationException("Primero ejecutá el paso de credenciales (readAndSecure) para esta cámara.")
 
         try {
-            if (!deviceName.isNullOrBlank()) {
-                setOsdName(accessIp, deviceName)
-            }
-
+            // Un único recorrido continuo del asistente: red (paso 1) → hora
+            // (paso 2, sin tocar) → OSD (paso 3) → seguir hasta el paso
+            // final y confirmarlo. Antes esto se hacía en dos pasadas
+            // separadas, cada una abandonada a mitad del asistente —
+            // confirmado contra hardware real que así NO se aplica nada.
             navigateAndWaitForPortal(accessIp, "/doc/index.html#/wizard")
             if (!waitFor("document.querySelector('.el-form-item') != null", 6000)) {
-                throw PortalAutomationException("No se pudo llegar a la pantalla de ajustes de red del asistente.")
+                throw PortalAutomationException("No se pudo llegar al asistente de configuración de la cámara.")
             }
 
             // Apagar DHCP si está prendido — reintenta y verifica, porque el
@@ -408,8 +441,18 @@ class HikvisionPortalAutomation(private val activity: Activity) {
             if (!ok) throw PortalAutomationException("No se encontraron los campos de IP/máscara en el asistente.")
 
             delay(500)
-            exec("""(function(){ var btn = ${findButtonByTextJs("Siguiente")}; if (btn) btn.click(); })()""")
-            delay(2500)
+            clickNext() // paso 1 (red) → paso 2 (hora)
+            clickNext() // paso 2 (hora, sin tocar) → paso 3 (OSD)
+
+            if (!deviceName.isNullOrBlank()) {
+                fillOsdStep(deviceName)
+            }
+
+            val finished = advanceWizardToFinish()
+            if (!finished) {
+                throw PortalAutomationException("Se completaron los campos pero no se encontró el paso final del asistente para confirmarlos — la cámara puede no haber aplicado los cambios. Probá de nuevo o revisalo manualmente en el panel de la cámara.")
+            }
+            delay(1500)
 
             destroyWebView()
             return true
