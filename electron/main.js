@@ -79,14 +79,32 @@ function beginSilentInstall() {
   }
 
   try {
+    // Log persistente (no por sesión) para poder diagnosticar sin depender
+    // de capturas de pantalla del técnico si esto vuelve a fallar — el
+    // historial de intentos previos se conserva (append).
+    const logPath = path.join(os.tmpdir(), 'fcc_update_log.txt');
+    const batPath = path.join(os.tmpdir(), 'fcc-update-helper.bat');
+    const batContent = [
+      '@echo off',
+      `echo %date% %time% - esperando antes de instalar >> "${logPath}"`,
+      'ping -n 6 127.0.0.1 >nul',
+      `if exist "${installerPath}" (`,
+      `  echo %date% %time% - instalador encontrado, lanzando >> "${logPath}"`,
+      `  start "" "${installerPath}" --updated /S --force-run`,
+      `  echo %date% %time% - start ejecutado >> "${logPath}"`,
+      `) else (`,
+      `  echo %date% %time% - ERROR: no se encontro el instalador en ${installerPath} >> "${logPath}"`,
+      `)`
+    ].join('\r\n');
+    fs.writeFileSync(batPath, batContent, 'utf8');
+
     // windowsHide de Node no es confiable para ocultar la consola de
     // cmd.exe en todas las versiones de Windows (confirmado: se veía una
     // ventana de "ping" real al abrir la app) — el método robusto es
     // delegar el lanzamiento a WScript.Shell.Run con windowStyle=0, que sí
     // garantiza que no se muestre ninguna ventana.
-    const cmdLine = `cmd /c ping -n 6 127.0.0.1 >nul & start "" "${installerPath}" --updated /S --force-run`;
     const vbsPath = path.join(os.tmpdir(), `fcc-update-${Date.now()}.vbs`);
-    fs.writeFileSync(vbsPath, `CreateObject("WScript.Shell").Run "${cmdLine.replace(/"/g, '""')}", 0, False`, 'utf8');
+    fs.writeFileSync(vbsPath, `CreateObject("WScript.Shell").Run """${batPath}""", 0, False`, 'utf8');
 
     const helper = spawn('wscript.exe', ['//B', vbsPath], { detached: true, stdio: 'ignore', windowsHide: true });
     helper.unref();
