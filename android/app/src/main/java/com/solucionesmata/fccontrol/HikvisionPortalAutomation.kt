@@ -218,10 +218,24 @@ class HikvisionPortalAutomation(private val activity: Activity) {
                 return s;
               }
               var target = norm(${jsStr(text)});
-              var all = Array.from(document.querySelectorAll('li, div, span, a, button, i, svg, .el-menu-item, .el-tabs__item, [role=tab], [title], [aria-label]'));
+              var all = Array.from(document.querySelectorAll('li, div, span, a, button, i, svg, .el-menu-item, .el-tabs__item, [role=tab], [title], [aria-label], [class]'));
               var candidates = all.filter(function(el){ return norm(el.textContent) === target; });
               if (!candidates.length) candidates = all.filter(function(el){ return norm(el.textContent).includes(target); });
               if (!candidates.length) candidates = all.filter(function(el){ return norm(labelOf(el)).includes(target); });
+              if (!candidates.length) {
+                // Último recurso: íconos sin texto ni title/aria-label
+                // (típico de fuentes de íconos tipo Element UI, ej. clase
+                // "el-icon-setting") solo se ubican por palabras clave en
+                // su clase CSS — suele estar en inglés aunque la UI no lo esté.
+                var keywordsByTarget = { 'CONFIGURACION': ['setting', 'config', 'gear', 'cog'] };
+                var keywords = keywordsByTarget[target] || [];
+                if (keywords.length) {
+                  candidates = all.filter(function(el){
+                    var cls = ((el.getAttribute && el.getAttribute('class')) || '').toLowerCase();
+                    return keywords.some(function(k){ return cls.includes(k); });
+                  });
+                }
+              }
               candidates.sort(function(a, b){ return a.innerHTML.length - b.innerHTML.length; });
               var el = candidates[0];
               if (el) { el.click(); return true; }

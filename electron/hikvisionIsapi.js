@@ -198,10 +198,26 @@ function clickMenuTextJs(text) {
         return s;
       }
       const target = norm(${JSON.stringify(text)});
-      const all = Array.from(document.querySelectorAll('li, div, span, a, button, i, svg, .el-menu-item, .el-tabs__item, [role=tab], [title], [aria-label]'));
+      const all = Array.from(document.querySelectorAll('li, div, span, a, button, i, svg, .el-menu-item, .el-tabs__item, [role=tab], [title], [aria-label], [class]'));
       let candidates = all.filter(el => norm(el.textContent) === target);
       if (!candidates.length) candidates = all.filter(el => norm(el.textContent).includes(target));
       if (!candidates.length) candidates = all.filter(el => norm(labelOf(el)).includes(target));
+      if (!candidates.length) {
+        // Último recurso: íconos sin texto ni title/aria-label (típico de
+        // fuentes de íconos tipo Element UI, ej. clase "el-icon-setting")
+        // solo se pueden ubicar por palabras clave en su clase CSS — las
+        // clases suelen estar en inglés aunque la UI esté en español.
+        const keywordsByTarget = {
+          'CONFIGURACION': ['setting', 'config', 'gear', 'cog']
+        };
+        const keywords = keywordsByTarget[target] || [];
+        if (keywords.length) {
+          candidates = all.filter(el => {
+            const cls = (el.getAttribute && el.getAttribute('class') || '').toLowerCase();
+            return keywords.some(k => cls.includes(k));
+          });
+        }
+      }
       candidates.sort((a, b) => a.innerHTML.length - b.innerHTML.length);
       const el = candidates[0];
       if (el) { el.click(); return true; }

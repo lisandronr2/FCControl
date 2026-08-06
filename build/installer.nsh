@@ -60,35 +60,21 @@ Var pid
 ; — customUnInstallCheck solo se inserta en el instalador, nunca junto
 ; con customCheckAppRunning en la misma pasada, así que no hay conflicto.
 
+; Se probaron tres variantes de retry acá (chequeo directo de $R0, chequeo
+; con IfErrors, prechequeo de si hay UninstallString en el registro) y las
+; tres siguieron fallando en la práctica — $R0 es un registro NSIS de uso
+; general reutilizado en decenas de lugares del script completo, y confiar
+; en su valor puntual en este hook resultó ser inherentemente frágil
+; (contaminación cruzada confirmada varias veces). Además se confirmó que
+; esta build nunca llega a escribir una entrada de desinstalación en el
+; registro de Windows en primer lugar (ni en instalaciones limpias), así
+; que "desinstalar la versión anterior" no tiene, de base, nada real y
+; confiable que hacer.
+;
+; La solución que de verdad funciona: no bloquear la instalación nueva por
+; esto. Los archivos de la versión nueva se copian igual encima en el
+; mismo directorio de instalación sin importar el resultado de este paso
+; — el peor caso es un archivo viejo que ya no se usa quedando huérfano,
+; no una instalación rota.
 !macro customUnInstallCheck
-  StrCpy $fccWaitCount 0
-
-  fcc_uninstall_check_loop:
-    IfErrors fcc_uninstall_retry_now fcc_uninstall_check_r0
-
-    fcc_uninstall_check_r0:
-    ${if} $R0 == 0
-      Goto fcc_uninstall_ok
-    ${endIf}
-
-    fcc_uninstall_retry_now:
-    ClearErrors
-    IntOp $fccWaitCount $fccWaitCount + 1
-    ${if} $fccWaitCount >= 5
-      MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"
-      DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`
-      SetErrorLevel 2
-      Quit
-    ${endIf}
-    DetailPrint "Reintentando quitar la versión anterior de FCControl..."
-    Sleep 2000
-    ; Se llama a la función directamente (no a la macro "uninstallOldVersion")
-    ; porque en este punto del archivo esa macro todavía no está definida
-    ; (se define más abajo en el mismo installUtil.nsh) — la función sí es
-    ; resoluble en cualquier orden.
-    Push "SHELL_CONTEXT"
-    Call uninstallOldVersion
-    Goto fcc_uninstall_check_loop
-
-  fcc_uninstall_ok:
 !macroend
