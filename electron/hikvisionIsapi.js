@@ -376,6 +376,15 @@ async function isapiGetXml(win, path) {
 async function isapiPutXml(win, path, xml) {
   const res = await isapiFetch(win, 'PUT', path, xml);
   if (res.status !== 200) throw new Error(`ISAPI PUT ${path} falló (status ${res.status}): ${(res.text || '').slice(0, 300)}`);
+  // Hikvision puede devolver HTTP 200 con un <ResponseStatus> que indica
+  // fallo lógico adentro (statusCode != 1, ej. parámetro inválido o
+  // rechazado por el firmware) — un 200 crudo NO alcanza como prueba de
+  // que el cambio realmente se aplicó.
+  const statusCode = readXmlTag(res.text, 'statusCode');
+  if (statusCode && statusCode !== '1') {
+    const statusString = readXmlTag(res.text, 'statusString') || '';
+    throw new Error(`ISAPI PUT ${path} rechazado por la cámara (statusCode ${statusCode} ${statusString}): ${(res.text || '').slice(0, 300)}`);
+  }
   return res.text;
 }
 
@@ -474,6 +483,29 @@ async function isapiSetNetwork(win, interfaceId, { ip, mask, gateway }) {
     current = replaceXmlTagScoped(current, 'DefaultGateway', 'ipAddress', gateway);
   }
   await isapiPutXml(win, path, current);
+  await verifyNetworkApplied(win, path, ip);
+}
+
+// La cámara puede aceptar un PUT de red (HTTP 200 + statusCode 1) y aun
+// así no aplicar el cambio — confirmado en producción que "la app dice
+// que cambió la IP" no era prueba suficiente: la cámara seguía
+// reportando la IP de fábrica. Se relee el valor guardado y se compara
+// contra lo pedido antes de dar el paso por exitoso. Si el GET de
+// verificación falla (ej. porque la interfaz ya cambió de IP y el fetch
+// same-origin dejó de resolver), NO se trata como fallo duro — es la
+// señal esperada de un cambio que sí surtió efecto.
+async function verifyNetworkApplied(win, path, expectedIp) {
+  await new Promise(r => setTimeout(r, 800));
+  let after;
+  try {
+    after = await isapiGetXml(win, path);
+  } catch (_) {
+    return; // no se pudo releer — probablemente porque sí cambió de IP
+  }
+  const appliedIp = readXmlTag(after, 'ipAddress');
+  if (appliedIp && appliedIp !== expectedIp) {
+    throw new Error(`La cámara aceptó el cambio pero sigue reportando la IP ${appliedIp} en vez de ${expectedIp} — no se aplicó de verdad.`);
+  }
 }
 
 // Intenta el flujo completo por ISAPI directo. Se prueba ANTES que la
@@ -668,6 +700,12 @@ async function setOsdChannelNames(win, deviceName) {
     })()
   `);
 
+  // IMPORTANTE: cada canal se guarda ANTES de cambiar de pestaña al
+  // siguiente. Guardar una sola vez al final (después de setear los dos
+  // canales) es lo que causaba que el cambio del Canal 1 se perdiera —
+  // al clickear la pestaña "2", el formulario de Vue recarga sus datos
+  // para ese canal y descarta cualquier edición sin guardar del anterior,
+  // así que el único Guardar final solo terminaba aplicando el Canal 2.
   if (channelTabsInfo >= 2) {
     for (let ch = 1; ch <= 2; ch++) {
       const clicked = await exec(win, `
@@ -689,6 +727,12 @@ async function setOsdChannelNames(win, deviceName) {
       await waitFor(win, `Array.from(document.querySelectorAll('input')).some(i => i.value && i.value.trim() !== '')`, 4000, 300);
       const set = await setChannelName(String(ch));
       if (!set) throw new Error(`No se encontró el campo "Nombre del Canal" para el canal ${ch}.`);
+
+      await new Promise(r => setTimeout(r, 300));
+      if (!(await clickSaveButton(win))) {
+        throw new Error(`No se encontró un botón para guardar el canal ${ch} en Ajustes OSD.`);
+      }
+      await new Promise(r => setTimeout(r, 1200));
     }
   } else {
     await waitFor(win, `Array.from(document.querySelectorAll('input')).some(i => i.value && i.value.trim() !== '')`, 4000, 300);
@@ -697,13 +741,13 @@ async function setOsdChannelNames(win, deviceName) {
       const diag = await exec(win, `JSON.stringify(Array.from(document.querySelectorAll('input')).map(i => ({type: i.type, value: i.value})))`).catch(() => '[]');
       throw new Error(`No se encontró el campo "Nombre del Canal" en Ajustes OSD. Inputs visibles: ${diag}`);
     }
-  }
 
-  await new Promise(r => setTimeout(r, 300));
-  if (!(await clickSaveButton(win))) {
-    throw new Error('No se encontró un botón para guardar en Ajustes OSD.');
+    await new Promise(r => setTimeout(r, 300));
+    if (!(await clickSaveButton(win))) {
+      throw new Error('No se encontró un botón para guardar en Ajustes OSD.');
+    }
+    await new Promise(r => setTimeout(r, 1200));
   }
-  await new Promise(r => setTimeout(r, 1200));
 }
 
 async function readAndSecure({ accessIp, currentUser = 'admin', currentPass = '12345', newPass }) {
@@ -878,6 +922,13 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
       throw new Error('Se completaron los campos pero no se encontró el paso final del asistente para confirmarlos — la cámara puede no haber aplicado los cambios. Probá de nuevo o revisalo manualmente en el panel de la cámara.');
     }
     await new Promise(r => setTimeout(r, 1500));
+
+    // Mismo problema que se confirmó con el camino ISAPI: el asistente
+    // puede reportar "listo" (encontró y clickeó un botón final) sin que
+    // la cámara realmente haya aplicado la IP nueva. Se relee vía ISAPI
+    // (autenticado por la misma cookie de sesión) antes de dar por bueno
+    // el cambio.
+    await verifyNetworkApplied(win, '/ISAPI/System/Network/interfaces/1/ipAddress', targetIp);
 
     sessions.delete(accessIp);
     win.destroy();
