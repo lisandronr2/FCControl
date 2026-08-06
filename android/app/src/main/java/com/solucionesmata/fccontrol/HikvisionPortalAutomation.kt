@@ -205,10 +205,23 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         val js = """
             (function(){
               function norm(s){ return (s||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+              // Los íconos del riel lateral (Configuración, etc.) no siempre
+              // tienen texto visible — la etiqueta suele estar en
+              // title/aria-label del propio elemento o de un ancestro cercano.
+              function labelOf(el){
+                var s = el.textContent || '';
+                var node = el;
+                for (var i = 0; i < 3 && node; i++){
+                  s += ' ' + (node.getAttribute && (node.getAttribute('title') || node.getAttribute('aria-label') || '') || '');
+                  node = node.parentElement;
+                }
+                return s;
+              }
               var target = norm(${jsStr(text)});
-              var all = Array.from(document.querySelectorAll('li, div, span, a, button, .el-menu-item, .el-tabs__item, [role=tab]'));
+              var all = Array.from(document.querySelectorAll('li, div, span, a, button, i, svg, .el-menu-item, .el-tabs__item, [role=tab], [title], [aria-label]'));
               var candidates = all.filter(function(el){ return norm(el.textContent) === target; });
               if (!candidates.length) candidates = all.filter(function(el){ return norm(el.textContent).includes(target); });
+              if (!candidates.length) candidates = all.filter(function(el){ return norm(labelOf(el)).includes(target); });
               candidates.sort(function(a, b){ return a.innerHTML.length - b.innerHTML.length; });
               var el = candidates[0];
               if (el) { el.click(); return true; }

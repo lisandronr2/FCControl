@@ -185,10 +185,23 @@ function clickMenuTextJs(text) {
   return `
     (function(){
       function norm(s){ return (s||'').trim().toUpperCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''); }
+      // Los íconos del riel lateral (Configuración, etc.) no siempre tienen
+      // texto visible — la etiqueta suele estar en title/aria-label del
+      // propio elemento o de un ancestro cercano (wrapper del ícono).
+      function labelOf(el){
+        let s = el.textContent || '';
+        let node = el;
+        for (let i = 0; i < 3 && node; i++){
+          s += ' ' + (node.getAttribute && (node.getAttribute('title') || node.getAttribute('aria-label') || '') || '');
+          node = node.parentElement;
+        }
+        return s;
+      }
       const target = norm(${JSON.stringify(text)});
-      const all = Array.from(document.querySelectorAll('li, div, span, a, button, .el-menu-item, .el-tabs__item, [role=tab]'));
+      const all = Array.from(document.querySelectorAll('li, div, span, a, button, i, svg, .el-menu-item, .el-tabs__item, [role=tab], [title], [aria-label]'));
       let candidates = all.filter(el => norm(el.textContent) === target);
       if (!candidates.length) candidates = all.filter(el => norm(el.textContent).includes(target));
+      if (!candidates.length) candidates = all.filter(el => norm(labelOf(el)).includes(target));
       candidates.sort((a, b) => a.innerHTML.length - b.innerHTML.length);
       const el = candidates[0];
       if (el) { el.click(); return true; }
