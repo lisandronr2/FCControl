@@ -565,27 +565,33 @@ async function setDeviceNameInSystemInfo(win, deviceName) {
   await new Promise(r => setTimeout(r, 1200));
 }
 
-// Pone el nombre OSD (superpuesto en la imagen) en Configuración del OSD
-// → Nombre del Canal, para Canal 1 y Canal 2. El campo trae de fábrica
-// "Camera 1"/"Camera 2" — se reemplaza solo la palabra "Camera" por el
+// Pone el nombre OSD (superpuesto en la imagen) en Imagen → Ajustes OSD
+// → Nombre del canal, para Canal 1 y Canal 2. El campo trae de fábrica
+// "Camera 01"/"Camera 02" — se reemplaza solo la palabra "Camera" por el
 // nombre del dispositivo, dejando el número tal cual venía (pedido
 // explícito: no reformatear el sufijo).
 //
-// Confirmado con captura real de la cámara: al clickear la rueda
-// dentada, la pantalla por defecto ("Configuración común", primer ítem
-// del sidebar, ya seleccionado sin necesidad de click adicional) trae
-// una pestaña llamada literalmente "Configuración del OSD" junto a
-// Vídeo/Imagen/Ajuste hora — no hace falta navegar al ítem "Imagen" del
-// sidebar en absoluto, alcanza con clickear esa pestaña directamente.
+// Confirmado con captura real de la cámara (con preview en vivo del
+// overlay, campo "Nombre del canal" = "Camera 01"): "Imagen" es un ítem
+// del SIDEBAR (no una pestaña de Configuración común, como se había
+// asumido por error en un intento anterior) y "Ajustes OSD" es una
+// pestaña dentro de esa pantalla, junto a Mostrar ajustes/Máscara de
+// privacidad/Superposición de imágenes/etc.
 async function setOsdChannelNames(win, deviceName) {
   if (!(await clickSettingsGearVerified(win, hashIncludesJs('config')))) {
     throw new Error('No se encontró el ícono de "Configuración" (rueda dentada) en el panel de la cámara.');
   }
   await new Promise(r => setTimeout(r, 500));
 
-  if (!(await clickMenuTextVerified(win, 'Configuración del OSD', `${bodyIncludesJs('OSD')} || ${bodyIncludesJs('Nombre del Canal')}`, 3))) {
-    throw new Error('No se encontró "Configuración del OSD" en el panel de la cámara.');
+  if (!(await clickMenuTextVerified(win, 'Imagen', `${bodyIncludesJs('Ajustes OSD')} || ${bodyIncludesJs('Máscara de privacidad')}`, 3, { excludeTabs: true }))) {
+    throw new Error('No se encontró "Imagen" en el panel de la cámara.');
   }
+  await new Promise(r => setTimeout(r, 500));
+
+  // "Ajustes OSD" es una pestaña dentro del contenido de Imagen, no otro
+  // ítem del sidebar — se clickea sin excludeTabs. El chequeo de
+  // contenido real de abajo (onPage) confirma si realmente se llegó.
+  await clickMenuText(win, ['Ajustes OSD', 'Ajuste OSD']);
   await new Promise(r => setTimeout(r, 500));
 
   const onPage = await waitFor(win, `
