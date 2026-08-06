@@ -238,7 +238,16 @@ class HikvisionPortalAutomation(private val activity: Activity) {
               }
               candidates.sort(function(a, b){ return a.innerHTML.length - b.innerHTML.length; });
               var el = candidates[0];
-              if (el) { el.click(); return true; }
+              if (el) {
+                // Algunos menús laterales despliegan el submenú al pasar el
+                // mouse (hover), no al hacer click — confirmado que la
+                // segunda vez que se navega a "Configuración" en la misma
+                // sesión, un .click() solo no alcanza.
+                el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                el.click();
+                return true;
+              }
               return false;
             })()
         """.trimIndent()

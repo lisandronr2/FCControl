@@ -220,7 +220,17 @@ function clickMenuTextJs(text) {
       }
       candidates.sort((a, b) => a.innerHTML.length - b.innerHTML.length);
       const el = candidates[0];
-      if (el) { el.click(); return true; }
+      if (el) {
+        // Algunos menús laterales despliegan el submenú al pasar el mouse
+        // (hover), no al hacer click — confirmado que la segunda vez que
+        // se navega a "Configuración" en la misma sesión, un .click() solo
+        // no alcanza. Se disparan los eventos de mouse además del click
+        // para cubrir ambos casos sin saber cuál usa esta pantalla.
+        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        el.click();
+        return true;
+      }
       return false;
     })()
   `;
