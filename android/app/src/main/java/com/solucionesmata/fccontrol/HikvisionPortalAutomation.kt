@@ -331,8 +331,8 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         val channelTabsInfo = exec(
             """
             (function(){
-              var tabs = Array.from(document.querySelectorAll('.el-tabs__item, .el-radio, [role=tab]'));
-              var chTabs = tabs.filter(function(t){ return /^(canal\s*)?[12]${'$'}|^ch\s*[12]${'$'}/i.test(t.textContent.trim()); });
+              var all = Array.from(document.querySelectorAll('li, div, span, a, button, [role=tab]'));
+              var chTabs = all.filter(function(t){ return /^(canal\s*)?[12]${'$'}|^ch\s*[12]${'$'}/i.test((t.textContent || '').trim()); });
               return chTabs.length;
             })()
             """.trimIndent()
@@ -342,6 +342,12 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         // el resto (típicamente el número de canal) — si por algún motivo
         // el campo no dice "Camera", usa el número de canal detectado como
         // respaldo en vez de perder ese dato.
+        //
+        // No asumimos ninguna estructura de formulario particular (esta
+        // pantalla no usa .el-form-item/<label>, ni siquiera input[type=text]
+        // explícito) — la señal más confiable es directamente el VALOR
+        // actual del campo ("Camera 01"/"Camera 02"), y solo si eso falla se
+        // busca por cercanía a un texto "Nombre del canal" que no sea botón.
         suspend fun setChannelName(fallbackSuffix: String): Boolean {
             val js = """
                 (function(){
@@ -354,16 +360,25 @@ class HikvisionPortalAutomation(private val activity: Activity) {
                     el.dispatchEvent(new Event('change', { bubbles: true }));
                     return true;
                   }
-                  var items = Array.from(document.querySelectorAll('.el-form-item'));
-                  var item = items.find(function(it){
-                    var lbl = it.querySelector('label');
-                    return lbl && lbl.textContent.toUpperCase().includes('NOMBRE DEL CANAL');
-                  });
-                  var input = item ? item.querySelector('input[type=text]') : null;
+                  function norm(s){ return (s||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+                  var isTextInput = function(el){ return el.tagName === 'INPUT' && (el.type === 'text' || el.type === ''); };
+                  var allTextInputs = Array.from(document.querySelectorAll('input')).filter(isTextInput);
+
+                  var input = allTextInputs.find(function(i){ return /camera/i.test(i.value || ''); });
+
                   if (!input) {
-                    input = Array.from(document.querySelectorAll('input[type=text]'))
-                      .find(function(i){ return i.value && /camera/i.test(i.value); });
+                    var labelLike = Array.from(document.querySelectorAll('label, span, div'))
+                      .find(function(el){ return norm(el.textContent) === 'NOMBRE DEL CANAL'; });
+                    if (labelLike) {
+                      var container = labelLike.parentElement;
+                      for (var i = 0; i < 5 && container && !input; i++) {
+                        var found = container.querySelector('input');
+                        if (found && isTextInput(found)) input = found;
+                        container = container.parentElement;
+                      }
+                    }
                   }
+
                   if (!input) return false;
                   var current = (input.value || '').trim();
                   var newVal;
@@ -384,9 +399,11 @@ class HikvisionPortalAutomation(private val activity: Activity) {
             for (ch in 1..2) {
                 val clickJs = """
                     (function(){
-                      var tabs = Array.from(document.querySelectorAll('.el-tabs__item, .el-radio, [role=tab]'));
+                      var all = Array.from(document.querySelectorAll('li, div, span, a, button, [role=tab]'));
                       var re = new RegExp('^(canal\\s*)?$ch${'$'}|^ch\\s*$ch${'$'}', 'i');
-                      var tab = tabs.find(function(t){ return re.test(t.textContent.trim()); });
+                      var candidates = all.filter(function(t){ return re.test((t.textContent || '').trim()); });
+                      candidates.sort(function(a, b){ return a.innerHTML.length - b.innerHTML.length; });
+                      var tab = candidates[0];
                       if (tab) { tab.click(); return true; }
                       return false;
                     })()
@@ -402,9 +419,9 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         } else {
             if (!setChannelName("")) {
                 val diag = try {
-                    exec("JSON.stringify(Array.from(document.querySelectorAll('.el-form-item label')).map(function(l){return l.textContent.trim();}))")
+                    exec("JSON.stringify(Array.from(document.querySelectorAll('input')).map(function(i){return {type:i.type,value:i.value};}))")
                 } catch (e: Exception) { "[]" }
-                throw PortalAutomationException("No se encontró el campo \"Nombre del Canal\" en Ajustes OSD. Etiquetas visibles: $diag")
+                throw PortalAutomationException("No se encontró el campo \"Nombre del Canal\" en Ajustes OSD. Inputs visibles: $diag")
             }
         }
 

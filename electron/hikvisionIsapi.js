@@ -313,12 +313,13 @@ async function setOsdChannelNames(win, deviceName) {
     throw new Error(`No se llegó a la pantalla de Ajustes OSD (${diag}).`);
   }
 
-  // ¿Cámara de dos canales? Buscamos pestañas/selectores "1"/"2" o
-  // "Canal 1"/"Canal 2"/"CH1"/"CH2".
+  // ¿Cámara de dos canales? Buscamos elementos clickeables (no solo
+  // pestañas de Element UI — esta pantalla usa botones sueltos) cuyo
+  // texto sea exactamente "1"/"2"/"Canal 1"/"CH1", etc.
   const channelTabsInfo = await exec(win, `
     (function(){
-      const tabs = Array.from(document.querySelectorAll('.el-tabs__item, .el-radio, [role=tab]'));
-      const chTabs = tabs.filter(t => /^(canal\\s*)?[12]$|^ch\\s*[12]$/i.test(t.textContent.trim()));
+      const all = Array.from(document.querySelectorAll('li, div, span, a, button, [role=tab]'));
+      const chTabs = all.filter(t => /^(canal\\s*)?[12]$|^ch\\s*[12]$/i.test((t.textContent || '').trim()));
       return chTabs.length;
     })()
   `);
@@ -327,6 +328,12 @@ async function setOsdChannelNames(win, deviceName) {
   // resto (típicamente el número de canal) — si por algún motivo el
   // campo no dice "Camera", usa el número de canal detectado como
   // respaldo en vez de perder ese dato.
+  //
+  // No asumimos ninguna estructura de formulario particular (esta
+  // pantalla no usa .el-form-item/<label>, ni siquiera input[type=text]
+  // explícito) — la señal más confiable es directamente el VALOR actual
+  // del campo ("Camera 01"/"Camera 02"), y solo si eso falla se busca
+  // por cercanía a un texto "Nombre del canal" que no sea un botón.
   const setChannelName = async (fallbackSuffix) => exec(win, `
     (function(){
       function setVal(el, val) {
@@ -338,16 +345,25 @@ async function setOsdChannelNames(win, deviceName) {
         el.dispatchEvent(new Event('change', { bubbles: true }));
         return true;
       }
-      const items = Array.from(document.querySelectorAll('.el-form-item'));
-      let item = items.find(it => {
-        const lbl = it.querySelector('label');
-        return lbl && lbl.textContent.toUpperCase().includes('NOMBRE DEL CANAL');
-      });
-      let input = item ? item.querySelector('input[type=text]') : null;
+      function norm(s){ return (s||'').trim().toUpperCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''); }
+      const isTextInput = el => el.tagName === 'INPUT' && (el.type === 'text' || el.type === '');
+      const allTextInputs = Array.from(document.querySelectorAll('input')).filter(isTextInput);
+
+      let input = allTextInputs.find(i => /camera/i.test(i.value || ''));
+
       if (!input) {
-        input = Array.from(document.querySelectorAll('input[type=text]'))
-          .find(i => i.value && /camera/i.test(i.value));
+        const labelLike = Array.from(document.querySelectorAll('label, span, div'))
+          .find(el => norm(el.textContent) === 'NOMBRE DEL CANAL');
+        if (labelLike) {
+          let container = labelLike.parentElement;
+          for (let i = 0; i < 5 && container && !input; i++) {
+            const found = container.querySelector('input');
+            if (found && isTextInput(found)) input = found;
+            container = container.parentElement;
+          }
+        }
       }
+
       if (!input) return false;
       const current = (input.value || '').trim();
       let newVal;
@@ -366,8 +382,11 @@ async function setOsdChannelNames(win, deviceName) {
     for (let ch = 1; ch <= 2; ch++) {
       const clicked = await exec(win, `
         (function(){
-          const tabs = Array.from(document.querySelectorAll('.el-tabs__item, .el-radio, [role=tab]'));
-          const tab = tabs.find(t => new RegExp('^(canal\\\\s*)?${ch}$|^ch\\\\s*${ch}$', 'i').test(t.textContent.trim()));
+          const all = Array.from(document.querySelectorAll('li, div, span, a, button, [role=tab]'));
+          const re = new RegExp('^(canal\\\\s*)?${ch}$|^ch\\\\s*${ch}$', 'i');
+          let candidates = all.filter(t => re.test((t.textContent || '').trim()));
+          candidates.sort((a, b) => a.innerHTML.length - b.innerHTML.length);
+          const tab = candidates[0];
           if (tab) { tab.click(); return true; }
           return false;
         })()
@@ -380,8 +399,8 @@ async function setOsdChannelNames(win, deviceName) {
   } else {
     const set = await setChannelName('');
     if (!set) {
-      const diag = await exec(win, `JSON.stringify(Array.from(document.querySelectorAll('.el-form-item label')).map(l => l.textContent.trim()))`).catch(() => '[]');
-      throw new Error(`No se encontró el campo "Nombre del Canal" en Ajustes OSD. Etiquetas visibles: ${diag}`);
+      const diag = await exec(win, `JSON.stringify(Array.from(document.querySelectorAll('input')).map(i => ({type: i.type, value: i.value})))`).catch(() => '[]');
+      throw new Error(`No se encontró el campo "Nombre del Canal" en Ajustes OSD. Inputs visibles: ${diag}`);
     }
   }
 
