@@ -220,17 +220,7 @@ function clickMenuTextJs(text) {
       }
       candidates.sort((a, b) => a.innerHTML.length - b.innerHTML.length);
       const el = candidates[0];
-      if (el) {
-        // Algunos menús laterales despliegan el submenú al pasar el mouse
-        // (hover), no al hacer click — confirmado que la segunda vez que
-        // se navega a "Configuración" en la misma sesión, un .click() solo
-        // no alcanza. Se disparan los eventos de mouse además del click
-        // para cubrir ambos casos sin saber cuál usa esta pantalla.
-        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-        el.click();
-        return true;
-      }
+      if (el) { el.click(); return true; }
       return false;
     })()
   `;
@@ -238,6 +228,23 @@ function clickMenuTextJs(text) {
 
 async function clickMenuText(win, text) {
   return exec(win, clickMenuTextJs(text));
+}
+
+// Un solo click no siempre "pega" (una transición CSS, un toast de "Guardado"
+// tapando el ítem un instante, etc.) — en vez de asumir que funcionó y recién
+// fallar varios pasos después con un error confuso, se verifica que el click
+// realmente haya llevado a la pantalla esperada y, si no, se reintenta.
+async function clickMenuTextVerified(win, text, verifyJs, attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    const clicked = await clickMenuText(win, text);
+    if (clicked) {
+      if (!verifyJs) return true;
+      const ok = await waitFor(win, verifyJs, 2500, 200);
+      if (ok) return true;
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
 }
 
 // Clickea el primer botón de "confirmar cambios" que encuentre en la
@@ -257,11 +264,16 @@ async function clickSaveButton(win) {
 // cambio de inmediato (mismo mecanismo que la contraseña, que sabemos que
 // funciona) — no hace falta pasar por ningún asistente de varios pasos.
 async function setDeviceNameInSystemInfo(win, deviceName) {
-  for (const step of ['Configuración', 'Sistema', 'Configuración del Sistema']) {
-    if (!(await clickMenuText(win, step))) {
-      throw new Error(`No se encontró "${step}" en el panel de la cámara.`);
+  const steps = [
+    { label: 'Configuración', verify: `document.body.textContent.includes('Sistema')` },
+    { label: 'Sistema', verify: `document.body.textContent.includes('Configuración del Sistema')` },
+    { label: 'Configuración del Sistema', verify: `document.body.textContent.includes('Información') || document.body.textContent.includes('Nombre de dispositivo')` }
+  ];
+  for (const step of steps) {
+    if (!(await clickMenuTextVerified(win, step.label, step.verify))) {
+      throw new Error(`No se encontró "${step.label}" en el panel de la cámara.`);
     }
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 500));
   }
   await clickMenuText(win, 'Información Básica'); // por si no quedó seleccionada por defecto
   await new Promise(r => setTimeout(r, 500));
@@ -307,11 +319,16 @@ async function setDeviceNameInSystemInfo(win, deviceName) {
 // "Camera" por el nombre del dispositivo, dejando el número tal cual
 // venía (pedido explícito: no reformatear el sufijo).
 async function setOsdChannelNames(win, deviceName) {
-  for (const step of ['Configuración', 'Imagen', 'Ajustes OSD']) {
-    if (!(await clickMenuText(win, step))) {
-      throw new Error(`No se encontró "${step}" en el panel de la cámara.`);
+  const steps = [
+    { label: 'Configuración', verify: `document.body.textContent.includes('Imagen')` },
+    { label: 'Imagen', verify: `document.body.textContent.includes('Ajustes OSD')` },
+    { label: 'Ajustes OSD', verify: `document.body.textContent.toUpperCase().includes('OSD') || document.body.textContent.toUpperCase().includes('NOMBRE DEL CANAL')` }
+  ];
+  for (const step of steps) {
+    if (!(await clickMenuTextVerified(win, step.label, step.verify))) {
+      throw new Error(`No se encontró "${step.label}" en el panel de la cámara.`);
     }
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 500));
   }
 
   const onPage = await waitFor(win, `
