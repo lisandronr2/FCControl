@@ -181,11 +181,19 @@ async function advanceWizardToFinish(win, maxSteps = 6) {
 // primero y por "contiene" como respaldo) porque las etiquetas reales del
 // panel varían levemente entre lo que el técnico recuerda y lo que
 // realmente dice la UI (p. ej. "Ajuste OSD" vs "Ajustes OSD").
-function clickMenuTextJs(textOrVariants) {
+function clickMenuTextJs(textOrVariants, opts = {}) {
   // Acepta un string o un array de variantes equivalentes (ej. "Ajustes
   // OSD" / "Ajuste OSD" — no siempre se sabe de antemano si el firmware
   // usa singular o plural) y clickea la primera que encuentre.
   const variants = Array.isArray(textOrVariants) ? textOrVariants : [textOrVariants];
+  // excludeTabs: el sidebar de navegación reutiliza nombres que también
+  // existen como pestañas de contenido en otras pantallas (ej. "Imagen"
+  // es a la vez una sección del sidebar de Configuración Y una pestaña
+  // dentro de Vídeo/Imagen en Configuración común). Cuando estamos
+  // navegando el sidebar, se descartan candidatos que sean pestañas
+  // (role=tab / .el-tabs__item) para no terminar clickeando la pestaña
+  // equivocada por simple coincidencia de texto.
+  const excludeTabs = !!opts.excludeTabs;
   return `
     (function(){
       function norm(s){ return (s||'').trim().toUpperCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''); }
@@ -201,27 +209,15 @@ function clickMenuTextJs(textOrVariants) {
         }
         return s;
       }
+      function isTab(el){
+        return el.getAttribute('role') === 'tab' || (el.className && String(el.className).includes('tabs__item'));
+      }
       const targets = ${JSON.stringify(variants)}.map(norm);
-      const all = Array.from(document.querySelectorAll('li, div, span, a, button, i, svg, .el-menu-item, .el-tabs__item, [role=tab], [title], [aria-label], [class]'));
+      let all = Array.from(document.querySelectorAll('li, div, span, a, button, i, svg, .el-menu-item, .el-tabs__item, [role=tab], [title], [aria-label], [class]'));
+      if (${JSON.stringify(excludeTabs)}) all = all.filter(el => !isTab(el));
       let candidates = all.filter(el => targets.includes(norm(el.textContent)));
       if (!candidates.length) candidates = all.filter(el => { const t = norm(el.textContent); return targets.some(tg => t.includes(tg)); });
       if (!candidates.length) candidates = all.filter(el => { const t = norm(labelOf(el)); return targets.some(tg => t.includes(tg)); });
-      if (!candidates.length) {
-        // Último recurso: íconos sin texto ni title/aria-label (típico de
-        // fuentes de íconos tipo Element UI, ej. clase "el-icon-setting")
-        // solo se pueden ubicar por palabras clave en su clase CSS — las
-        // clases suelen estar en inglés aunque la UI esté en español.
-        const keywordsByTarget = {
-          'CONFIGURACION': ['setting', 'config', 'gear', 'cog']
-        };
-        const keywords = targets.flatMap(tg => keywordsByTarget[tg] || []);
-        if (keywords.length) {
-          candidates = all.filter(el => {
-            const cls = (el.getAttribute && el.getAttribute('class') || '').toLowerCase();
-            return keywords.some(k => cls.includes(k));
-          });
-        }
-      }
       candidates.sort((a, b) => a.innerHTML.length - b.innerHTML.length);
       const el = candidates[0];
       if (el) { el.click(); return true; }
@@ -230,8 +226,38 @@ function clickMenuTextJs(textOrVariants) {
   `;
 }
 
-async function clickMenuText(win, text) {
-  return exec(win, clickMenuTextJs(text));
+async function clickMenuText(win, text, opts) {
+  return exec(win, clickMenuTextJs(text, opts));
+}
+
+// Clickea específicamente el ícono de la rueda dentada (abre el panel de
+// Configuración). Va por fuera de clickMenuTextJs a propósito: ese
+// buscador genérico prioriza coincidencias de texto, y el sidebar de
+// Configuración trae un ítem llamado literalmente "Configuración común"
+// — su texto CONTIENE la palabra "Configuración" como substring, así que
+// si ese sidebar ya está abierto (sesión reutilizada de un intento
+// anterior) el matcher genérico terminaba clickeando "Configuración
+// común" en vez del ícono, dejando la automatización varada en esa
+// pantalla. El ícono en sí no tiene texto/title/aria-label confiable, así
+// que se ubica únicamente por palabras clave en su clase CSS.
+function clickSettingsGearJs() {
+  return `
+    (function(){
+      const keywords = ['setting', 'config', 'gear', 'cog'];
+      let candidates = Array.from(document.querySelectorAll('[class]')).filter(el => {
+        const cls = (el.getAttribute('class') || '').toLowerCase();
+        return keywords.some(k => cls.includes(k));
+      });
+      candidates.sort((a, b) => a.innerHTML.length - b.innerHTML.length);
+      const el = candidates[0];
+      if (el) { el.click(); return true; }
+      return false;
+    })()
+  `;
+}
+
+async function clickSettingsGear(win) {
+  return exec(win, clickSettingsGearJs());
 }
 
 // Genera una condición JS que busca `needle` en el texto del panel
@@ -259,13 +285,13 @@ function bodyIncludesJs(needle) {
 // correcto, lo cerraría en vez de abrirlo, y la propia verificación
 // posterior fallaría por esa razón (no porque no se haya encontrado el
 // ítem), agotando los reintentos con el menú abriéndose y cerrándose.
-async function clickMenuTextVerified(win, text, verifyJs, attempts = 3) {
+async function clickVerified(win, clickFn, verifyJs, attempts = 3) {
   if (verifyJs) {
     const already = await exec(win, verifyJs).catch(() => false);
     if (already) return true;
   }
   for (let i = 0; i < attempts; i++) {
-    const clicked = await clickMenuText(win, text);
+    const clicked = await clickFn();
     if (clicked) {
       if (!verifyJs) return true;
       const ok = await waitFor(win, verifyJs, 2500, 200);
@@ -274,6 +300,14 @@ async function clickMenuTextVerified(win, text, verifyJs, attempts = 3) {
     await new Promise(r => setTimeout(r, 500));
   }
   return false;
+}
+
+async function clickMenuTextVerified(win, text, verifyJs, attempts = 3, opts) {
+  return clickVerified(win, () => clickMenuText(win, text, opts), verifyJs, attempts);
+}
+
+async function clickSettingsGearVerified(win, verifyJs, attempts = 3) {
+  return clickVerified(win, () => clickSettingsGear(win), verifyJs, attempts);
 }
 
 // Clickea el primer botón de "confirmar cambios" que encuentre en la
@@ -293,13 +327,17 @@ async function clickSaveButton(win) {
 // cambio de inmediato (mismo mecanismo que la contraseña, que sabemos que
 // funciona) — no hace falta pasar por ningún asistente de varios pasos.
 async function setDeviceNameInSystemInfo(win, deviceName) {
+  if (!(await clickSettingsGearVerified(win, bodyIncludesJs('Sistema')))) {
+    throw new Error('No se encontró el ícono de "Configuración" (rueda dentada) en el panel de la cámara.');
+  }
+  await new Promise(r => setTimeout(r, 500));
+
   const steps = [
-    { label: 'Configuración', verify: bodyIncludesJs('Sistema') },
     { label: 'Sistema', verify: `${bodyIncludesJs('Configuración del sistema')} || ${bodyIncludesJs('Administración de cuentas')}` },
     { label: 'Configuración del Sistema', verify: `${bodyIncludesJs('Información')} || ${bodyIncludesJs('Nombre de dispositivo')}` }
   ];
   for (const step of steps) {
-    if (!(await clickMenuTextVerified(win, step.label, step.verify))) {
+    if (!(await clickMenuTextVerified(win, step.label, step.verify, 3, { excludeTabs: true }))) {
       throw new Error(`No se encontró "${step.label}" en el panel de la cámara.`);
     }
     await new Promise(r => setTimeout(r, 500));
@@ -348,13 +386,17 @@ async function setDeviceNameInSystemInfo(win, deviceName) {
 // "Camera" por el nombre del dispositivo, dejando el número tal cual
 // venía (pedido explícito: no reformatear el sufijo).
 async function setOsdChannelNames(win, deviceName) {
+  if (!(await clickSettingsGearVerified(win, bodyIncludesJs('Imagen')))) {
+    throw new Error('No se encontró el ícono de "Configuración" (rueda dentada) en el panel de la cámara.');
+  }
+  await new Promise(r => setTimeout(r, 500));
+
   const steps = [
-    { label: 'Configuración', verify: bodyIncludesJs('Imagen') },
     { label: 'Imagen', verify: `${bodyIncludesJs('Ajustes OSD')} || ${bodyIncludesJs('Ajuste OSD')}` },
     { label: ['Ajustes OSD', 'Ajuste OSD'], verify: `${bodyIncludesJs('OSD')} || ${bodyIncludesJs('Nombre del Canal')}` }
   ];
   for (const step of steps) {
-    if (!(await clickMenuTextVerified(win, step.label, step.verify))) {
+    if (!(await clickMenuTextVerified(win, step.label, step.verify, 3, { excludeTabs: true }))) {
       throw new Error(`No se encontró "${step.label}" en el panel de la cámara.`);
     }
     await new Promise(r => setTimeout(r, 500));
