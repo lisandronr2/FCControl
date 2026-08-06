@@ -62,12 +62,20 @@ class HikvisionPortalAutomation(private val activity: Activity) {
             }
         }
 
-        // 1x1 e invisible, pero colgado del árbol de vistas de la Activity:
-        // un WebView nunca adjuntado (o con la Activity en background) puede
-        // dejar de ejecutar JS o de cargar recursos — no alcanza con crearlo
-        // suelto en memoria.
+        // Invisible pero con tamaño real, colgado del árbol de vistas de la
+        // Activity: un WebView nunca adjuntado (o con la Activity en
+        // background) puede dejar de ejecutar JS — pero un WebView de 1x1
+        // píxel TAMBIÉN puede quedar sin renderizar ni ejecutar JS en
+        // muchas versiones de Android (vistas de tamaño casi cero se tratan
+        // como "no visibles, no hace falta dibujarlas" y el motor de layout
+        // interno del WebView nunca corre) — confirmado en la práctica: el
+        // panel de la cámara nunca terminaba de montar sus <input> en la
+        // tablet, aunque en escritorio (una ventana real, no una View)
+        // nunca dio problema. Se le da un tamaño real (el panel completo
+        // del asistente ronda 900x700 en escritorio) mientras se mantiene
+        // INVISIBLE para que no se vea en pantalla.
         val decor = activity.window.decorView as ViewGroup
-        val lp = ViewGroup.LayoutParams(1, 1)
+        val lp = ViewGroup.LayoutParams(900, 700)
         wv.visibility = View.INVISIBLE
         decor.addView(wv, lp)
 
@@ -185,7 +193,7 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         lastLoadError = null
         withContext(Dispatchers.Main) { wv.loadUrl("http://$accessIp$path") }
 
-        val loaded = waitFor("document.querySelectorAll('input').length > 0", 8000, 400)
+        val loaded = waitFor("document.querySelectorAll('input').length > 0", 12000, 400)
         if (!loaded) {
             lastLoadError?.let {
                 throw PortalAutomationException("No se pudo conectar con la cámara en $accessIp ($it). Verificá la IP y que la tablet esté en la misma red.")
