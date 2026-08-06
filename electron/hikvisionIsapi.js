@@ -181,7 +181,11 @@ async function advanceWizardToFinish(win, maxSteps = 6) {
 // primero y por "contiene" como respaldo) porque las etiquetas reales del
 // panel varían levemente entre lo que el técnico recuerda y lo que
 // realmente dice la UI (p. ej. "Ajuste OSD" vs "Ajustes OSD").
-function clickMenuTextJs(text) {
+function clickMenuTextJs(textOrVariants) {
+  // Acepta un string o un array de variantes equivalentes (ej. "Ajustes
+  // OSD" / "Ajuste OSD" — no siempre se sabe de antemano si el firmware
+  // usa singular o plural) y clickea la primera que encuentre.
+  const variants = Array.isArray(textOrVariants) ? textOrVariants : [textOrVariants];
   return `
     (function(){
       function norm(s){ return (s||'').trim().toUpperCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''); }
@@ -197,11 +201,11 @@ function clickMenuTextJs(text) {
         }
         return s;
       }
-      const target = norm(${JSON.stringify(text)});
+      const targets = ${JSON.stringify(variants)}.map(norm);
       const all = Array.from(document.querySelectorAll('li, div, span, a, button, i, svg, .el-menu-item, .el-tabs__item, [role=tab], [title], [aria-label], [class]'));
-      let candidates = all.filter(el => norm(el.textContent) === target);
-      if (!candidates.length) candidates = all.filter(el => norm(el.textContent).includes(target));
-      if (!candidates.length) candidates = all.filter(el => norm(labelOf(el)).includes(target));
+      let candidates = all.filter(el => targets.includes(norm(el.textContent)));
+      if (!candidates.length) candidates = all.filter(el => { const t = norm(el.textContent); return targets.some(tg => t.includes(tg)); });
+      if (!candidates.length) candidates = all.filter(el => { const t = norm(labelOf(el)); return targets.some(tg => t.includes(tg)); });
       if (!candidates.length) {
         // Último recurso: íconos sin texto ni title/aria-label (típico de
         // fuentes de íconos tipo Element UI, ej. clase "el-icon-setting")
@@ -210,7 +214,7 @@ function clickMenuTextJs(text) {
         const keywordsByTarget = {
           'CONFIGURACION': ['setting', 'config', 'gear', 'cog']
         };
-        const keywords = keywordsByTarget[target] || [];
+        const keywords = targets.flatMap(tg => keywordsByTarget[tg] || []);
         if (keywords.length) {
           candidates = all.filter(el => {
             const cls = (el.getAttribute && el.getAttribute('class') || '').toLowerCase();
@@ -230,11 +234,36 @@ async function clickMenuText(win, text) {
   return exec(win, clickMenuTextJs(text));
 }
 
+// Genera una condición JS que busca `needle` en el texto del panel
+// ignorando mayúsculas/minúsculas y acentos — misma normalización que usa
+// clickMenuTextJs para encontrar el elemento a clickear. Comparar en crudo
+// (textContent.includes('Sistema')) es frágil: el HTML real de la cámara
+// mezcla casing ("Configuración del sistema" con s minúscula, por ejemplo)
+// y un desajuste de mayúsculas hacía que la verificación post-click fallara
+// SIEMPRE aunque el click hubiera funcionado, disparando reintentos que
+// abrían/cerraban acordeones del menú hasta agotar los intentos.
+function bodyIncludesJs(needle) {
+  const norm = s => (s || '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return `document.body.textContent.toUpperCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').includes(${JSON.stringify(norm(needle))})`;
+}
+
 // Un solo click no siempre "pega" (una transición CSS, un toast de "Guardado"
 // tapando el ítem un instante, etc.) — en vez de asumir que funcionó y recién
 // fallar varios pasos después con un error confuso, se verifica que el click
 // realmente haya llevado a la pantalla esperada y, si no, se reintenta.
+//
+// Antes de clickear, chequea si el estado buscado YA está presente (por
+// ejemplo, si "Sistema" quedó expandido de una navegación previa en la
+// misma sesión). Items tipo submenú/acordeón alternan abierto↔cerrado con
+// cada click — si el reintento clickeara un ítem que ya está en el estado
+// correcto, lo cerraría en vez de abrirlo, y la propia verificación
+// posterior fallaría por esa razón (no porque no se haya encontrado el
+// ítem), agotando los reintentos con el menú abriéndose y cerrándose.
 async function clickMenuTextVerified(win, text, verifyJs, attempts = 3) {
+  if (verifyJs) {
+    const already = await exec(win, verifyJs).catch(() => false);
+    if (already) return true;
+  }
   for (let i = 0; i < attempts; i++) {
     const clicked = await clickMenuText(win, text);
     if (clicked) {
@@ -265,9 +294,9 @@ async function clickSaveButton(win) {
 // funciona) — no hace falta pasar por ningún asistente de varios pasos.
 async function setDeviceNameInSystemInfo(win, deviceName) {
   const steps = [
-    { label: 'Configuración', verify: `document.body.textContent.includes('Sistema')` },
-    { label: 'Sistema', verify: `document.body.textContent.includes('Configuración del Sistema')` },
-    { label: 'Configuración del Sistema', verify: `document.body.textContent.includes('Información') || document.body.textContent.includes('Nombre de dispositivo')` }
+    { label: 'Configuración', verify: bodyIncludesJs('Sistema') },
+    { label: 'Sistema', verify: `${bodyIncludesJs('Configuración del sistema')} || ${bodyIncludesJs('Administración de cuentas')}` },
+    { label: 'Configuración del Sistema', verify: `${bodyIncludesJs('Información')} || ${bodyIncludesJs('Nombre de dispositivo')}` }
   ];
   for (const step of steps) {
     if (!(await clickMenuTextVerified(win, step.label, step.verify))) {
@@ -278,7 +307,7 @@ async function setDeviceNameInSystemInfo(win, deviceName) {
   await clickMenuText(win, 'Información Básica'); // por si no quedó seleccionada por defecto
   await new Promise(r => setTimeout(r, 500));
 
-  const onPage = await waitFor(win, `document.body.textContent.includes('Nombre de dispositivo')`, 5000);
+  const onPage = await waitFor(win, bodyIncludesJs('Nombre de dispositivo'), 5000);
   if (!onPage) {
     const diag = await exec(win, `JSON.stringify({url: location.href, bodySnippet: document.body.textContent.slice(0,300)})`).catch(() => '{}');
     throw new Error(`No se llegó a la pantalla de Información Básica (${diag}).`);
@@ -320,9 +349,9 @@ async function setDeviceNameInSystemInfo(win, deviceName) {
 // venía (pedido explícito: no reformatear el sufijo).
 async function setOsdChannelNames(win, deviceName) {
   const steps = [
-    { label: 'Configuración', verify: `document.body.textContent.includes('Imagen')` },
-    { label: 'Imagen', verify: `document.body.textContent.includes('Ajustes OSD')` },
-    { label: 'Ajustes OSD', verify: `document.body.textContent.toUpperCase().includes('OSD') || document.body.textContent.toUpperCase().includes('NOMBRE DEL CANAL')` }
+    { label: 'Configuración', verify: bodyIncludesJs('Imagen') },
+    { label: 'Imagen', verify: `${bodyIncludesJs('Ajustes OSD')} || ${bodyIncludesJs('Ajuste OSD')}` },
+    { label: ['Ajustes OSD', 'Ajuste OSD'], verify: `${bodyIncludesJs('OSD')} || ${bodyIncludesJs('Nombre del Canal')}` }
   ];
   for (const step of steps) {
     if (!(await clickMenuTextVerified(win, step.label, step.verify))) {
