@@ -330,6 +330,174 @@ async function clickSaveButton(win) {
   return false;
 }
 
+// ---------------------------------------------------------------------
+// ISAPI directo (GET/PUT XML), reutilizando la sesión ya autenticada
+// ---------------------------------------------------------------------
+// Automatizar el DOM del portal (arriba) es necesariamente frágil: cada
+// vez que HikMicro cambia un texto, una clase CSS o cómo se renderiza el
+// sidebar, hay que salir a parchear. La propia ISAPI (API REST/XML nativa
+// de Hikvision) es mucho más estable porque es un contrato versionado,
+// no una UI. Ya se había descartado hablarle ISAPI para la ACTIVACIÓN de
+// fábrica (ver comentario al inicio del archivo: la contraseña va cifrada
+// con un esquema propietario no reverseado) — pero para una cámara YA
+// activada y logueada, no hace falta ese cifrado: alcanza con la cookie
+// de sesión que el propio login del portal ya deja puesta en la
+// BrowserWindow. Esto está confirmado en este mismo archivo desde antes
+// (ver readAndSecure): un fetch('/ISAPI/...', {credentials:'same-origin'})
+// autenticado por cookie ya devuelve XML plano sin cifrado.
+//
+// Se ejecuta vía executeJavaScript en la BrowserWindow (no con el módulo
+// http de Node) a propósito: reutiliza la autenticación por cookie ya
+// probada en vez de reimplementar Digest Auth a ciegas sin cámara real
+// contra la cual validarlo — HTTP Digest tiene suficientes variantes
+// (qop, algorithm=MD5-sess, manejo de nc/cnonce) como para que una
+// implementación no probada en hardware real sea un riesgo, sobre todo
+// para el paso de red (una IP mal aplicada puede dejar la cámara
+// inaccesible).
+async function isapiFetch(win, method, path, bodyXml) {
+  const script = `
+    fetch(${JSON.stringify(path)}, {
+      method: ${JSON.stringify(method)},
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/xml' }
+      ${bodyXml ? `, body: ${JSON.stringify(bodyXml)}` : ''}
+    }).then(async r => ({ status: r.status, text: await r.text() }))
+      .catch(e => ({ status: 0, text: String(e && e.message || e) }))
+  `;
+  return exec(win, script);
+}
+
+async function isapiGetXml(win, path) {
+  const res = await isapiFetch(win, 'GET', path);
+  if (res.status !== 200) throw new Error(`ISAPI GET ${path} falló (status ${res.status}): ${(res.text || '').slice(0, 300)}`);
+  return res.text;
+}
+
+async function isapiPutXml(win, path, xml) {
+  const res = await isapiFetch(win, 'PUT', path, xml);
+  if (res.status !== 200) throw new Error(`ISAPI PUT ${path} falló (status ${res.status}): ${(res.text || '').slice(0, 300)}`);
+  return res.text;
+}
+
+function escapeXml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// La mayoría de los PUT de ISAPI exigen el documento completo (no un
+// patch parcial) — muchos firmwares interpretan campos ausentes como "sí,
+// bórralos"/"restaurar default" en vez de "dejar como estaba". Por eso el
+// patrón siempre es: GET del XML actual → reemplazar solo la etiqueta que
+// nos interesa con una regex simple (sin agregar un parser XML como
+// dependencia nueva, dado que ISAPI devuelve XML plano y poco anidado) →
+// PUT del documento modificado completo.
+function replaceXmlTag(xml, tag, value) {
+  const re = new RegExp(`(<${tag}>)[^<]*(</${tag}>)`);
+  if (!re.test(xml)) throw new Error(`No se encontró la etiqueta <${tag}> en la respuesta ISAPI de la cámara.`);
+  return xml.replace(re, `$1${escapeXml(value)}$2`);
+}
+
+function readXmlTag(xml, tag) {
+  const m = xml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
+  return m ? m[1] : null;
+}
+
+// Reemplaza <childTag> solo dentro del primer bloque <parentTag>...
+// </parentTag> — necesario cuando el mismo nombre de etiqueta aparece más
+// de una vez en el documento en distintos contextos (ej. <ipAddress>
+// aparece tanto a nivel raíz como anidado dentro de <DefaultGateway>).
+function replaceXmlTagScoped(xml, parentTag, childTag, value) {
+  const parentRe = new RegExp(`<${parentTag}>[\\s\\S]*?</${parentTag}>`);
+  const m = xml.match(parentRe);
+  if (!m) throw new Error(`No se encontró <${parentTag}> en la respuesta ISAPI de la cámara.`);
+  return xml.replace(parentRe, replaceXmlTag(m[0], childTag, value));
+}
+
+// PUT /ISAPI/System/deviceInfo — mismo campo que el DOM cambia en
+// Sistema → Configuración del Sistema → Información Básica → Nombre de
+// dispositivo.
+async function isapiSetDeviceName(win, deviceName) {
+  const path = '/ISAPI/System/deviceInfo';
+  const current = await isapiGetXml(win, path);
+  const updated = replaceXmlTag(current, 'deviceName', deviceName);
+  await isapiPutXml(win, path, updated);
+}
+
+// PUT /ISAPI/System/Video/inputs/channels/{id}/overlay — mismo campo que
+// el DOM cambia en Imagen → Ajuste OSD → Canal N → Nombre del Canal.
+// Igual criterio que la versión DOM: si el valor actual trae "Camera"
+// (de fábrica, ej. "Camera 01"), se reemplaza solo esa palabra
+// preservando el sufijo numérico tal cual venía; si no matchea ese
+// patrón, se arma un nombre nuevo con el número de canal.
+async function isapiSetChannelOsdName(win, channelId, deviceName) {
+  const path = `/ISAPI/System/Video/inputs/channels/${channelId}/overlay`;
+  const current = await isapiGetXml(win, path);
+  const parentMatch = current.match(/<channelNameOverlay>[\s\S]*?<\/channelNameOverlay>/);
+  if (!parentMatch) throw new Error(`No se encontró channelNameOverlay en el canal ${channelId}.`);
+  const currentName = readXmlTag(parentMatch[0], 'name') || '';
+  const newName = /camera/i.test(currentName)
+    ? currentName.replace(/camera/i, deviceName)
+    : `${deviceName} ${channelId}`;
+  const updated = replaceXmlTagScoped(current, 'channelNameOverlay', 'name', newName);
+  await isapiPutXml(win, path, updated);
+}
+
+// Cuántos canales de video expone la cámara (1 para modelos simples, 2
+// para los dual-lens que motivan setOsdChannelNames en la versión DOM).
+async function isapiListChannelIds(win) {
+  try {
+    const xml = await isapiGetXml(win, '/ISAPI/System/Video/inputs/channels');
+    const ids = Array.from(xml.matchAll(/<id>([^<]*)<\/id>/g)).map(m => m[1]);
+    return ids.length ? ids : ['1'];
+  } catch (_) {
+    return ['1'];
+  }
+}
+
+// PUT /ISAPI/System/Network/interfaces/{id}/ipAddress — mismo paso que el
+// asistente de red del DOM (advanceWizardToFinish). El orden de campos
+// típico de este endpoint en firmwares Hikvision es ipVersion, ipAddress,
+// subnetMask, ..., DefaultGateway → <ipAddress> raíz aparece ANTES que el
+// anidado en DefaultGateway, así que replaceXmlTag (que reemplaza solo la
+// primera ocurrencia) alcanza para el campo raíz sin necesidad de scope;
+// el de gateway sí se resuelve con replaceXmlTagScoped para no tocar el
+// de arriba por error.
+async function isapiSetNetwork(win, interfaceId, { ip, mask, gateway }) {
+  const path = `/ISAPI/System/Network/interfaces/${interfaceId}/ipAddress`;
+  let current = await isapiGetXml(win, path);
+  current = replaceXmlTag(current, 'ipAddress', ip);
+  current = replaceXmlTag(current, 'subnetMask', mask);
+  if (gateway) {
+    current = replaceXmlTagScoped(current, 'DefaultGateway', 'ipAddress', gateway);
+  }
+  await isapiPutXml(win, path, current);
+}
+
+// Intenta el flujo completo por ISAPI directo. Se prueba ANTES que la
+// automatización DOM porque, si el firmware acepta este esquema de XML,
+// es más rápido y no depende de que la UI del portal no haya cambiado —
+// pero como no hay forma de validar el esquema exacto de XML contra
+// hardware real desde acá, cualquier fallo (404 de un endpoint que no
+// existe en este firmware, un nombre de etiqueta distinto, etc.) hace
+// caer TODO el bloque para no dejar la cámara a medio configurar por una
+// mezcla de dos mecanismos distintos — y quien llama debe hacer fallback
+// completo a la secuencia DOM ya probada.
+async function tryIsapiFullFlow(win, { deviceName, targetIp, targetMask, targetGateway }) {
+  if (deviceName) {
+    await isapiSetDeviceName(win, deviceName);
+    const channelIds = await isapiListChannelIds(win);
+    for (const id of channelIds) {
+      await isapiSetChannelOsdName(win, id, deviceName);
+    }
+  }
+  if (targetIp && targetMask) {
+    await isapiSetNetwork(win, '1', { ip: targetIp, mask: targetMask, gateway: targetGateway });
+  }
+}
+
 // Pone el nombre del dispositivo en Configuración → Sistema →
 // Configuración del Sistema → Información Básica. Es una pantalla de
 // configuración normal con su propio botón de guardar que aplica el
@@ -590,6 +758,23 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
   const session = sessions.get(accessIp);
   if (!session) throw new Error('Primero ejecutá el paso de credenciales (readAndSecure) para esta cámara.');
   const { win } = session;
+
+  // Se intenta primero el camino ISAPI directo (más rápido y no depende
+  // de la UI del portal) y, si algo no matchea el esquema de este
+  // firmware en particular, se cae de lleno a la automatización DOM ya
+  // probada — nunca se mezclan los dos mecanismos a mitad de camino.
+  try {
+    await tryIsapiFullFlow(win, { deviceName, targetIp, targetMask, targetGateway });
+    // Igual que al cerrar el asistente DOM: si se cambió la IP, la cámara
+    // puede tardar un instante en aplicar el nuevo direccionamiento antes
+    // de que valga la pena cerrar la ventana.
+    await new Promise(r => setTimeout(r, 1500));
+    sessions.delete(accessIp);
+    win.destroy();
+    return { ok: true, probablySucceeded: true, via: 'isapi' };
+  } catch (isapiErr) {
+    console.warn(`ISAPI directo falló para ${accessIp}, se usa automatización DOM de respaldo: ${isapiErr.message}`);
+  }
 
   try {
     // Orden confirmado por el técnico contra el panel real: primero el
