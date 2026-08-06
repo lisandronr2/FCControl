@@ -477,6 +477,16 @@ async function isapiListChannelIds(win) {
 async function isapiSetNetwork(win, interfaceId, { ip, mask, gateway }) {
   const path = `/ISAPI/System/Network/interfaces/${interfaceId}/ipAddress`;
   let current = await isapiGetXml(win, path);
+  // Causa real confirmada en producción de "la cámara acepta el cambio
+  // pero sigue reportando la IP vieja": si la interfaz sigue en DHCP
+  // (<addressingType>dynamic</addressingType>, default de fábrica),
+  // escribir <ipAddress> a mano no tiene ningún efecto — la propia UI del
+  // portal ya maneja esto (ver dhcpOff en el flujo DOM, más abajo) pero
+  // el camino ISAPI se lo había salteado. Forzar a "static" en el mismo
+  // PUT es el equivalente ISAPI de apagar el switch de DHCP del asistente.
+  if (current.includes('<addressingType>')) {
+    current = replaceXmlTag(current, 'addressingType', 'static');
+  }
   current = replaceXmlTag(current, 'ipAddress', ip);
   current = replaceXmlTag(current, 'subnetMask', mask);
   if (gateway) {
@@ -656,7 +666,14 @@ async function setOsdChannelNames(win, deviceName) {
   // explícito) — la señal más confiable es directamente el VALOR actual
   // del campo ("Camera 01"/"Camera 02"), y solo si eso falla se busca
   // por cercanía a un texto "Nombre del canal" que no sea un botón.
-  const setChannelName = async (fallbackSuffix) => exec(win, `
+  // excludePrevValue: el valor exacto que se acaba de escribir en el
+  // canal anterior — si el click de la pestaña siguiente no llegó a
+  // "pegar" de verdad (mismo tipo de bug ya visto con otros clicks de
+  // este panel: se reporta clickeado pero el contenido no cambió), el
+  // input que matchea "value contiene Camera" puede seguir sin existir
+  // mientras que el campo visible sigue siendo el del canal anterior ya
+  // editado — evita reescribir ese mismo campo dos veces por error.
+  const setChannelName = async (fallbackSuffix, excludePrevValue) => exec(win, `
     (function(){
       function setVal(el, val) {
         if (!el) return false;
@@ -669,7 +686,9 @@ async function setOsdChannelNames(win, deviceName) {
       }
       function norm(s){ return (s||'').trim().toUpperCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''); }
       const isTextInput = el => el.tagName === 'INPUT' && (el.type === 'text' || el.type === '');
-      const allTextInputs = Array.from(document.querySelectorAll('input')).filter(isTextInput);
+      const excludeVal = ${JSON.stringify(excludePrevValue || null)};
+      const allTextInputs = Array.from(document.querySelectorAll('input')).filter(isTextInput)
+        .filter(i => excludeVal === null || (i.value || '').trim() !== excludeVal);
 
       let input = allTextInputs.find(i => /camera/i.test(i.value || ''));
 
@@ -680,13 +699,13 @@ async function setOsdChannelNames(win, deviceName) {
           let container = labelLike.parentElement;
           for (let i = 0; i < 5 && container && !input; i++) {
             const found = container.querySelector('input');
-            if (found && isTextInput(found)) input = found;
+            if (found && isTextInput(found) && (excludeVal === null || (found.value || '').trim() !== excludeVal)) input = found;
             container = container.parentElement;
           }
         }
       }
 
-      if (!input) return false;
+      if (!input) return { ok: false, newVal: null };
       const current = (input.value || '').trim();
       let newVal;
       if (/camera/i.test(current)) {
@@ -696,7 +715,8 @@ async function setOsdChannelNames(win, deviceName) {
         const suffix = m ? m[1] : ${JSON.stringify(fallbackSuffix)};
         newVal = (${JSON.stringify(deviceName)} + ' ' + suffix).trim();
       }
-      return setVal(input, newVal);
+      const ok = setVal(input, newVal);
+      return { ok, newVal: ok ? newVal : null };
     })()
   `);
 
@@ -707,26 +727,47 @@ async function setOsdChannelNames(win, deviceName) {
   // para ese canal y descarta cualquier edición sin guardar del anterior,
   // así que el único Guardar final solo terminaba aplicando el Canal 2.
   if (channelTabsInfo >= 2) {
+    let prevWrittenValue = null;
     for (let ch = 1; ch <= 2; ch++) {
-      const clicked = await exec(win, `
-        (function(){
-          const all = Array.from(document.querySelectorAll('li, div, span, a, button, [role=tab]'));
-          const re = new RegExp('^(canal\\\\s*)?${ch}$|^ch\\\\s*${ch}$', 'i');
-          let candidates = all.filter(t => re.test((t.textContent || '').trim()));
-          candidates.sort((a, b) => a.innerHTML.length - b.innerHTML.length);
-          const tab = candidates[0];
-          if (tab) { tab.click(); return true; }
-          return false;
-        })()
-      `);
-      if (!clicked) throw new Error(`No se encontró la pestaña del canal ${ch} en Ajustes OSD.`);
-      await new Promise(r => setTimeout(r, 500));
-      // Los valores actuales (Camera 01/02, etc.) se cargan de forma
-      // asíncrona al entrar a la pantalla o cambiar de canal — confirmado
-      // que sin esperar, los campos todavía están vacíos cuando se los lee.
-      await waitFor(win, `Array.from(document.querySelectorAll('input')).some(i => i.value && i.value.trim() !== '')`, 4000, 300);
-      const set = await setChannelName(String(ch));
-      if (!set) throw new Error(`No se encontró el campo "Nombre del Canal" para el canal ${ch}.`);
+      let tabSwitched = false;
+      for (let attempt = 0; attempt < 3 && !tabSwitched; attempt++) {
+        const clicked = await exec(win, `
+          (function(){
+            const all = Array.from(document.querySelectorAll('li, div, span, a, button, [role=tab]'));
+            const re = new RegExp('^(canal\\\\s*)?${ch}$|^ch\\\\s*${ch}$', 'i');
+            let candidates = all.filter(t => re.test((t.textContent || '').trim()));
+            candidates.sort((a, b) => a.innerHTML.length - b.innerHTML.length);
+            const tab = candidates[0];
+            if (tab) { tab.click(); return true; }
+            return false;
+          })()
+        `);
+        if (!clicked) throw new Error(`No se encontró la pestaña del canal ${ch} en Ajustes OSD.`);
+        await new Promise(r => setTimeout(r, 500));
+        // Los valores actuales (Camera 01/02, etc.) se cargan de forma
+        // asíncrona al entrar a la pantalla o cambiar de canal. Además,
+        // para canal 2+, hay que confirmar que el tab-switch realmente
+        // "pegó" y no seguimos viendo el campo ya editado del canal
+        // anterior — mismo tipo de click-sin-efecto ya visto en la
+        // navegación del sidebar (ver clickVerified más arriba).
+        // Se acota a inputs cuyo valor "tiene forma" de nombre de canal
+        // (contiene "camera" o termina en un número) en vez de cualquier
+        // input no vacío — la pantalla tiene otros campos (selects
+        // renderizados como input, checkboxes, etc.) que podrían dar un
+        // falso positivo de "ya cambió" sin que el canal haya cambiado.
+        const freshCondition = prevWrittenValue
+          ? `Array.from(document.querySelectorAll('input')).some(i => { const v=(i.value||'').trim(); return v !== '' && v !== ${JSON.stringify(prevWrittenValue)} && (/camera/i.test(v) || /\\d\\s*$/.test(v)); })`
+          : `Array.from(document.querySelectorAll('input')).some(i => { const v=(i.value||'').trim(); return v !== '' && (/camera/i.test(v) || /\\d\\s*$/.test(v)); })`;
+        tabSwitched = await waitFor(win, freshCondition, 2500, 250);
+        if (!tabSwitched) await new Promise(r => setTimeout(r, 400));
+      }
+      if (!tabSwitched) {
+        throw new Error(`No se pudo cambiar a la pestaña del canal ${ch} en Ajustes OSD (el contenido no cambió tras el click).`);
+      }
+
+      const result = await setChannelName(String(ch), prevWrittenValue);
+      if (!result || !result.ok) throw new Error(`No se encontró el campo "Nombre del Canal" para el canal ${ch}.`);
+      prevWrittenValue = result.newVal;
 
       await new Promise(r => setTimeout(r, 300));
       if (!(await clickSaveButton(win))) {
@@ -736,8 +777,8 @@ async function setOsdChannelNames(win, deviceName) {
     }
   } else {
     await waitFor(win, `Array.from(document.querySelectorAll('input')).some(i => i.value && i.value.trim() !== '')`, 4000, 300);
-    const set = await setChannelName('');
-    if (!set) {
+    const result = await setChannelName('', null);
+    if (!result || !result.ok) {
       const diag = await exec(win, `JSON.stringify(Array.from(document.querySelectorAll('input')).map(i => ({type: i.type, value: i.value})))`).catch(() => '[]');
       throw new Error(`No se encontró el campo "Nombre del Canal" en Ajustes OSD. Inputs visibles: ${diag}`);
     }
