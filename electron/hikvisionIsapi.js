@@ -565,40 +565,27 @@ async function setDeviceNameInSystemInfo(win, deviceName) {
   await new Promise(r => setTimeout(r, 1200));
 }
 
-// Pone el nombre OSD (superpuesto en la imagen) en Configuración → Imagen
-// → Ajustes OSD → Nombre del Canal, para Canal 1 y Canal 2. El campo trae
-// de fábrica "Camera 1"/"Camera 2" — se reemplaza solo la palabra
-// "Camera" por el nombre del dispositivo, dejando el número tal cual
-// venía (pedido explícito: no reformatear el sufijo).
+// Pone el nombre OSD (superpuesto en la imagen) en Configuración del OSD
+// → Nombre del Canal, para Canal 1 y Canal 2. El campo trae de fábrica
+// "Camera 1"/"Camera 2" — se reemplaza solo la palabra "Camera" por el
+// nombre del dispositivo, dejando el número tal cual venía (pedido
+// explícito: no reformatear el sufijo).
+//
+// Confirmado con captura real de la cámara: al clickear la rueda
+// dentada, la pantalla por defecto ("Configuración común", primer ítem
+// del sidebar, ya seleccionado sin necesidad de click adicional) trae
+// una pestaña llamada literalmente "Configuración del OSD" junto a
+// Vídeo/Imagen/Ajuste hora — no hace falta navegar al ítem "Imagen" del
+// sidebar en absoluto, alcanza con clickear esa pestaña directamente.
 async function setOsdChannelNames(win, deviceName) {
   if (!(await clickSettingsGearVerified(win, hashIncludesJs('config')))) {
     throw new Error('No se encontró el ícono de "Configuración" (rueda dentada) en el panel de la cámara.');
   }
   await new Promise(r => setTimeout(r, 500));
 
-  // Confirmado por el técnico: la ruta de sidebar es rueda dentada →
-  // Imagen directo, un solo click (no hay un ítem intermedio tipo
-  // "Configuración de Imagen" como sí lo hay para Sistema). No se conoce
-  // de antemano el slug de ruta interna para "Imagen" (a diferencia de
-  // "system", confirmado en capturas reales) — se apoya en la detección
-  // genérica de cambio de location.hash que hace clickVerified cuando no
-  // recibe verifyJs.
-  const steps = [
-    { label: 'Imagen', verify: null }
-  ];
-  for (const step of steps) {
-    if (!(await clickMenuTextVerified(win, step.label, step.verify, 3, { excludeTabs: true }))) {
-      throw new Error(`No se encontró "${step.label}" en el panel de la cámara.`);
-    }
-    await new Promise(r => setTimeout(r, 500));
+  if (!(await clickMenuTextVerified(win, 'Configuración del OSD', `${bodyIncludesJs('OSD')} || ${bodyIncludesJs('Nombre del Canal')}`, 3))) {
+    throw new Error('No se encontró "Configuración del OSD" en el panel de la cámara.');
   }
-
-  // "Ajustes OSD" es una pestaña dentro del contenido de Imagen (mismo
-  // patrón que "Información Básica" dentro de Configuración del Sistema),
-  // no otro ítem del sidebar — se clickea sin excludeTabs ni verificación
-  // estricta; el chequeo de contenido real de abajo es el que confirma si
-  // realmente se llegó.
-  await clickMenuText(win, ['Ajustes OSD', 'Ajuste OSD']);
   await new Promise(r => setTimeout(r, 500));
 
   const onPage = await waitFor(win, `
