@@ -142,7 +142,7 @@ async function navigateAndWaitForPortal(win, accessIp, path) {
 // cierre; si no aparece ninguno tras varios pasos, se lo reporta como
 // no confirmado en vez de asumir que se aplicó igual.
 async function advanceWizardToFinish(win, maxSteps = 6) {
-  const FINISH_WORDS = ['Finalizar', 'Completar', 'Terminar', 'Guardar', 'Aplicar', 'Confirmar'];
+  const FINISH_WORDS = ['Finalizar', 'Completar', 'Terminar', 'Guardar', 'Aplicar', 'Aceptar', 'Confirmar'];
   for (let step = 0; step < maxSteps; step++) {
     const clickedFinish = await exec(win, `
       (function(){
@@ -177,12 +177,18 @@ async function advanceWizardToFinish(win, maxSteps = 6) {
 // (los menús de este panel no son <button>, son <li>/<div>/<span> según la
 // pantalla) — prioriza el elemento más chico/específico que matchea, para
 // no clickear un contenedor grande que también contiene ese texto.
+// Matchea por texto de forma tolerante (sin acentos/mayúsculas, exacto
+// primero y por "contiene" como respaldo) porque las etiquetas reales del
+// panel varían levemente entre lo que el técnico recuerda y lo que
+// realmente dice la UI (p. ej. "Ajuste OSD" vs "Ajustes OSD").
 function clickMenuTextJs(text) {
   return `
     (function(){
-      const target = ${JSON.stringify(text)};
+      function norm(s){ return (s||'').trim().toUpperCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''); }
+      const target = norm(${JSON.stringify(text)});
       const all = Array.from(document.querySelectorAll('li, div, span, a, button, .el-menu-item, .el-tabs__item, [role=tab]'));
-      const candidates = all.filter(el => el.textContent.trim() === target);
+      let candidates = all.filter(el => norm(el.textContent) === target);
+      if (!candidates.length) candidates = all.filter(el => norm(el.textContent).includes(target));
       candidates.sort((a, b) => a.innerHTML.length - b.innerHTML.length);
       const el = candidates[0];
       if (el) { el.click(); return true; }
@@ -195,25 +201,36 @@ async function clickMenuText(win, text) {
   return exec(win, clickMenuTextJs(text));
 }
 
-// Pone el nombre del dispositivo en Sistema → Información básica. A
-// diferencia del asistente rápido, esta es una pantalla de configuración
-// normal con su propio botón Guardar que aplica el cambio de inmediato
-// (mismo mecanismo que la contraseña, que sabemos que funciona) — no hace
-// falta pasar por ningún asistente de varios pasos para esto.
+// Clickea el primer botón de "confirmar cambios" que encuentre en la
+// pantalla actual — las distintas pantallas de configuración usan
+// Guardar/Aceptar/Aplicar/Confirmar según la pantalla.
+async function clickSaveButton(win) {
+  for (const word of ['Guardar', 'Aceptar', 'Aplicar', 'Confirmar']) {
+    const clicked = await exec(win, `(function(){ const btn = ${findButtonByTextJs(word)}; if (btn) { btn.click(); return true; } return false; })()`);
+    if (clicked) return true;
+  }
+  return false;
+}
+
+// Pone el nombre del dispositivo en Configuración → Sistema →
+// Configuración del Sistema → Información Básica. Es una pantalla de
+// configuración normal con su propio botón de guardar que aplica el
+// cambio de inmediato (mismo mecanismo que la contraseña, que sabemos que
+// funciona) — no hace falta pasar por ningún asistente de varios pasos.
 async function setDeviceNameInSystemInfo(win, deviceName) {
-  if (!(await clickMenuText(win, 'Sistema'))) {
-    throw new Error('No se encontró el menú "Sistema" en el panel de la cámara.');
+  for (const step of ['Configuración', 'Sistema', 'Configuración del Sistema']) {
+    if (!(await clickMenuText(win, step))) {
+      throw new Error(`No se encontró "${step}" en el panel de la cámara.`);
+    }
+    await new Promise(r => setTimeout(r, 800));
   }
-  await new Promise(r => setTimeout(r, 800));
-  if (!(await clickMenuText(win, 'Información básica'))) {
-    throw new Error('No se encontró la pestaña "Información básica" dentro de Sistema.');
-  }
-  await new Promise(r => setTimeout(r, 800));
+  await clickMenuText(win, 'Información Básica'); // por si no quedó seleccionada por defecto
+  await new Promise(r => setTimeout(r, 500));
 
   const onPage = await waitFor(win, `document.body.textContent.includes('Nombre de dispositivo')`, 5000);
   if (!onPage) {
     const diag = await exec(win, `JSON.stringify({url: location.href, bodySnippet: document.body.textContent.slice(0,300)})`).catch(() => '{}');
-    throw new Error(`No se llegó a la pantalla de Información básica (${diag}).`);
+    throw new Error(`No se llegó a la pantalla de Información Básica (${diag}).`);
   }
 
   const set = await exec(win, `
@@ -236,27 +253,27 @@ async function setDeviceNameInSystemInfo(win, deviceName) {
       return setVal(input, ${JSON.stringify(deviceName)});
     })()
   `);
-  if (!set) throw new Error('No se encontró el campo "Nombre de dispositivo" en Información básica.');
+  if (!set) throw new Error('No se encontró el campo "Nombre de dispositivo" en Información Básica.');
 
   await new Promise(r => setTimeout(r, 300));
-  const saved = await exec(win, `(function(){ const btn = ${findButtonByTextJs('Guardar')}; if (btn) { btn.click(); return true; } return false; })()`);
-  if (!saved) throw new Error('No se encontró el botón Guardar en Información básica.');
+  if (!(await clickSaveButton(win))) {
+    throw new Error('No se encontró un botón para guardar en Información Básica.');
+  }
   await new Promise(r => setTimeout(r, 1200));
 }
 
-// Pone el nombre OSD (superpuesto en la imagen, reemplazando "CAMERA") en
-// Imagen → Ajuste OSD → Nombre del Canal. Igual que Información básica,
-// es una pantalla de configuración normal con Guardar propio — no el
-// asistente rápido.
+// Pone el nombre OSD (superpuesto en la imagen) en Configuración → Imagen
+// → Ajustes OSD → Nombre del Canal, para Canal 1 y Canal 2. El campo trae
+// de fábrica "Camera 1"/"Camera 2" — se reemplaza solo la palabra
+// "Camera" por el nombre del dispositivo, dejando el número tal cual
+// venía (pedido explícito: no reformatear el sufijo).
 async function setOsdChannelNames(win, deviceName) {
-  if (!(await clickMenuText(win, 'Imagen'))) {
-    throw new Error('No se encontró el menú "Imagen" en el panel de la cámara.');
+  for (const step of ['Configuración', 'Imagen', 'Ajustes OSD']) {
+    if (!(await clickMenuText(win, step))) {
+      throw new Error(`No se encontró "${step}" en el panel de la cámara.`);
+    }
+    await new Promise(r => setTimeout(r, 800));
   }
-  await new Promise(r => setTimeout(r, 800));
-  if (!(await clickMenuText(win, 'Ajuste OSD'))) {
-    throw new Error('No se encontró la pestaña "Ajuste OSD" dentro de Imagen.');
-  }
-  await new Promise(r => setTimeout(r, 800));
 
   const onPage = await waitFor(win, `
     document.body.textContent.toUpperCase().includes('OSD') ||
@@ -264,7 +281,7 @@ async function setOsdChannelNames(win, deviceName) {
   `, 5000);
   if (!onPage) {
     const diag = await exec(win, `JSON.stringify({url: location.href, bodySnippet: document.body.textContent.slice(0,300)})`).catch(() => '{}');
-    throw new Error(`No se llegó a la pantalla de Ajuste OSD (${diag}).`);
+    throw new Error(`No se llegó a la pantalla de Ajustes OSD (${diag}).`);
   }
 
   // ¿Cámara de dos canales? Buscamos pestañas/selectores "1"/"2" o
@@ -277,7 +294,11 @@ async function setOsdChannelNames(win, deviceName) {
     })()
   `);
 
-  const setChannelName = async (name) => exec(win, `
+  // Reemplaza solo "Camera" en el valor actual del campo, preservando el
+  // resto (típicamente el número de canal) — si por algún motivo el
+  // campo no dice "Camera", usa el número de canal detectado como
+  // respaldo en vez de perder ese dato.
+  const setChannelName = async (fallbackSuffix) => exec(win, `
     (function(){
       function setVal(el, val) {
         if (!el) return false;
@@ -295,11 +316,20 @@ async function setOsdChannelNames(win, deviceName) {
       });
       let input = item ? item.querySelector('input[type=text]') : null;
       if (!input) {
-        // Respaldo: cualquier input de texto cuyo valor actual sea "CAMERA"
         input = Array.from(document.querySelectorAll('input[type=text]'))
-          .find(i => i.value && i.value.toUpperCase().includes('CAMERA'));
+          .find(i => i.value && /camera/i.test(i.value));
       }
-      return setVal(input, ${JSON.stringify(name)});
+      if (!input) return false;
+      const current = (input.value || '').trim();
+      let newVal;
+      if (/camera/i.test(current)) {
+        newVal = current.replace(/camera/i, ${JSON.stringify(deviceName)});
+      } else {
+        const m = current.match(/(\\d+)\\s*$/);
+        const suffix = m ? m[1] : ${JSON.stringify(fallbackSuffix)};
+        newVal = (${JSON.stringify(deviceName)} + ' ' + suffix).trim();
+      }
+      return setVal(input, newVal);
     })()
   `);
 
@@ -313,22 +343,23 @@ async function setOsdChannelNames(win, deviceName) {
           return false;
         })()
       `);
-      if (!clicked) throw new Error(`No se encontró la pestaña del canal ${ch} en Ajuste OSD.`);
+      if (!clicked) throw new Error(`No se encontró la pestaña del canal ${ch} en Ajustes OSD.`);
       await new Promise(r => setTimeout(r, 500));
-      const set = await setChannelName(`${deviceName} 0${ch}`);
+      const set = await setChannelName(String(ch));
       if (!set) throw new Error(`No se encontró el campo "Nombre del Canal" para el canal ${ch}.`);
     }
   } else {
-    const set = await setChannelName(deviceName);
+    const set = await setChannelName('');
     if (!set) {
       const diag = await exec(win, `JSON.stringify(Array.from(document.querySelectorAll('.el-form-item label')).map(l => l.textContent.trim()))`).catch(() => '[]');
-      throw new Error(`No se encontró el campo "Nombre del Canal" en Ajuste OSD. Etiquetas visibles: ${diag}`);
+      throw new Error(`No se encontró el campo "Nombre del Canal" en Ajustes OSD. Etiquetas visibles: ${diag}`);
     }
   }
 
   await new Promise(r => setTimeout(r, 300));
-  const saved = await exec(win, `(function(){ const btn = ${findButtonByTextJs('Guardar')}; if (btn) { btn.click(); return true; } return false; })()`);
-  if (!saved) throw new Error('No se encontró el botón Guardar en Ajuste OSD.');
+  if (!(await clickSaveButton(win))) {
+    throw new Error('No se encontró un botón para guardar en Ajustes OSD.');
+  }
   await new Promise(r => setTimeout(r, 1200));
 }
 

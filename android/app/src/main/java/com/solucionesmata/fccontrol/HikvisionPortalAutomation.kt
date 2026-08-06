@@ -197,17 +197,18 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         }
     }
 
-    // Busca y clickea un elemento de menú/pestaña por su texto visible
-    // exacto (los menús de este panel no son <button>, son <li>/<div>/
-    // <span> según la pantalla) — prioriza el elemento más chico/específico
-    // que matchea, para no clickear un contenedor grande que también
-    // contiene ese texto.
+    // Matchea por texto de forma tolerante (sin acentos/mayúsculas, exacto
+    // primero y por "contiene" como respaldo) porque las etiquetas reales
+    // del panel varían levemente entre lo que el técnico recuerda y lo que
+    // realmente dice la UI (p. ej. "Ajuste OSD" vs "Ajustes OSD").
     private suspend fun clickMenuText(text: String): Boolean {
         val js = """
             (function(){
-              var target = ${jsStr(text)};
+              function norm(s){ return (s||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+              var target = norm(${jsStr(text)});
               var all = Array.from(document.querySelectorAll('li, div, span, a, button, .el-menu-item, .el-tabs__item, [role=tab]'));
-              var candidates = all.filter(function(el){ return el.textContent.trim() === target; });
+              var candidates = all.filter(function(el){ return norm(el.textContent) === target; });
+              if (!candidates.length) candidates = all.filter(function(el){ return norm(el.textContent).includes(target); });
               candidates.sort(function(a, b){ return a.innerHTML.length - b.innerHTML.length; });
               var el = candidates[0];
               if (el) { el.click(); return true; }
@@ -217,26 +218,37 @@ class HikvisionPortalAutomation(private val activity: Activity) {
         return exec(js) == "true"
     }
 
-    // Pone el nombre del dispositivo en Sistema → Información básica. A
-    // diferencia del asistente rápido, esta es una pantalla de
-    // configuración normal con su propio botón Guardar que aplica el
+    // Clickea el primer botón de "confirmar cambios" que encuentre en la
+    // pantalla actual — las distintas pantallas usan Guardar/Aceptar/
+    // Aplicar/Confirmar según cuál sea.
+    private suspend fun clickSaveButton(): Boolean {
+        for (word in listOf("Guardar", "Aceptar", "Aplicar", "Confirmar")) {
+            val clicked = exec("""(function(){ var btn = ${findButtonByTextJs(word)}; if (btn) { btn.click(); return true; } return false; })()""") == "true"
+            if (clicked) return true
+        }
+        return false
+    }
+
+    // Pone el nombre del dispositivo en Configuración → Sistema →
+    // Configuración del Sistema → Información Básica. Es una pantalla de
+    // configuración normal con su propio botón de guardar que aplica el
     // cambio de inmediato (mismo mecanismo que la contraseña, que sabemos
     // que funciona) — no hace falta ningún asistente de varios pasos.
     private suspend fun setDeviceNameInSystemInfo(deviceName: String) {
-        if (!clickMenuText("Sistema")) {
-            throw PortalAutomationException("No se encontró el menú \"Sistema\" en el panel de la cámara.")
+        for (step in listOf("Configuración", "Sistema", "Configuración del Sistema")) {
+            if (!clickMenuText(step)) {
+                throw PortalAutomationException("No se encontró \"$step\" en el panel de la cámara.")
+            }
+            delay(800)
         }
-        delay(800)
-        if (!clickMenuText("Información básica")) {
-            throw PortalAutomationException("No se encontró la pestaña \"Información básica\" dentro de Sistema.")
-        }
-        delay(800)
+        clickMenuText("Información Básica") // por si no quedó seleccionada por defecto
+        delay(500)
 
         if (!waitFor("document.body.textContent.includes('Nombre de dispositivo')", 5000)) {
             val diag = try {
                 exec("JSON.stringify({url: location.href, bodySnippet: document.body.textContent.slice(0,300)})")
             } catch (e: Exception) { "{}" }
-            throw PortalAutomationException("No se llegó a la pantalla de Información básica ($diag).")
+            throw PortalAutomationException("No se llegó a la pantalla de Información Básica ($diag).")
         }
 
         val set = exec(
@@ -253,26 +265,27 @@ class HikvisionPortalAutomation(private val activity: Activity) {
             })()
             """.trimIndent()
         ) == "true"
-        if (!set) throw PortalAutomationException("No se encontró el campo \"Nombre de dispositivo\" en Información básica.")
+        if (!set) throw PortalAutomationException("No se encontró el campo \"Nombre de dispositivo\" en Información Básica.")
 
         delay(300)
-        val saved = exec("""(function(){ var btn = ${findButtonByTextJs("Guardar")}; if (btn) { btn.click(); return true; } return false; })()""") == "true"
-        if (!saved) throw PortalAutomationException("No se encontró el botón Guardar en Información básica.")
+        if (!clickSaveButton()) {
+            throw PortalAutomationException("No se encontró un botón para guardar en Información Básica.")
+        }
         delay(1200)
     }
 
-    // Pone el nombre OSD (superpuesto en la imagen, reemplazando "CAMERA")
-    // en Imagen → Ajuste OSD → Nombre del Canal. Misma lógica que
-    // Información básica: pantalla normal con Guardar propio.
+    // Pone el nombre OSD en Configuración → Imagen → Ajustes OSD → Nombre
+    // del Canal, para Canal 1 y Canal 2. El campo trae de fábrica
+    // "Camera 1"/"Camera 2" — se reemplaza solo la palabra "Camera" por el
+    // nombre del dispositivo, dejando el número tal cual venía (pedido
+    // explícito: no reformatear el sufijo).
     private suspend fun setOsdChannelNames(deviceName: String) {
-        if (!clickMenuText("Imagen")) {
-            throw PortalAutomationException("No se encontró el menú \"Imagen\" en el panel de la cámara.")
+        for (step in listOf("Configuración", "Imagen", "Ajustes OSD")) {
+            if (!clickMenuText(step)) {
+                throw PortalAutomationException("No se encontró \"$step\" en el panel de la cámara.")
+            }
+            delay(800)
         }
-        delay(800)
-        if (!clickMenuText("Ajuste OSD")) {
-            throw PortalAutomationException("No se encontró la pestaña \"Ajuste OSD\" dentro de Imagen.")
-        }
-        delay(800)
 
         val onPage = waitFor(
             """
@@ -285,7 +298,7 @@ class HikvisionPortalAutomation(private val activity: Activity) {
             val diag = try {
                 exec("JSON.stringify({url: location.href, bodySnippet: document.body.textContent.slice(0,300)})")
             } catch (e: Exception) { "{}" }
-            throw PortalAutomationException("No se llegó a la pantalla de Ajuste OSD ($diag).")
+            throw PortalAutomationException("No se llegó a la pantalla de Ajustes OSD ($diag).")
         }
 
         val channelTabsInfo = exec(
@@ -298,10 +311,22 @@ class HikvisionPortalAutomation(private val activity: Activity) {
             """.trimIndent()
         ).toIntOrNull() ?: 0
 
-        suspend fun setChannelName(name: String): Boolean {
+        // Reemplaza solo "Camera" en el valor actual del campo, preservando
+        // el resto (típicamente el número de canal) — si por algún motivo
+        // el campo no dice "Camera", usa el número de canal detectado como
+        // respaldo en vez de perder ese dato.
+        suspend fun setChannelName(fallbackSuffix: String): Boolean {
             val js = """
                 (function(){
-                  $setValFn
+                  function setVal(el, val) {
+                    if (!el) return false;
+                    var proto = Object.getPrototypeOf(el);
+                    var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+                    setter.call(el, val);
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                  }
                   var items = Array.from(document.querySelectorAll('.el-form-item'));
                   var item = items.find(function(it){
                     var lbl = it.querySelector('label');
@@ -310,9 +335,19 @@ class HikvisionPortalAutomation(private val activity: Activity) {
                   var input = item ? item.querySelector('input[type=text]') : null;
                   if (!input) {
                     input = Array.from(document.querySelectorAll('input[type=text]'))
-                      .find(function(i){ return i.value && i.value.toUpperCase().includes('CAMERA'); });
+                      .find(function(i){ return i.value && /camera/i.test(i.value); });
                   }
-                  return setVal(input, ${jsStr(name)});
+                  if (!input) return false;
+                  var current = (input.value || '').trim();
+                  var newVal;
+                  if (/camera/i.test(current)) {
+                    newVal = current.replace(/camera/i, ${jsStr(deviceName)});
+                  } else {
+                    var m = current.match(/(\d+)\s*${'$'}/);
+                    var suffix = m ? m[1] : ${jsStr(fallbackSuffix)};
+                    newVal = (${jsStr(deviceName)} + ' ' + suffix).trim();
+                  }
+                  return setVal(input, newVal);
                 })()
             """.trimIndent()
             return exec(js) == "true"
@@ -330,25 +365,26 @@ class HikvisionPortalAutomation(private val activity: Activity) {
                     })()
                 """.trimIndent()
                 if (exec(clickJs) != "true") {
-                    throw PortalAutomationException("No se encontró la pestaña del canal $ch en Ajuste OSD.")
+                    throw PortalAutomationException("No se encontró la pestaña del canal $ch en Ajustes OSD.")
                 }
                 delay(500)
-                if (!setChannelName("$deviceName 0$ch")) {
+                if (!setChannelName(ch.toString())) {
                     throw PortalAutomationException("No se encontró el campo \"Nombre del Canal\" para el canal $ch.")
                 }
             }
         } else {
-            if (!setChannelName(deviceName)) {
+            if (!setChannelName("")) {
                 val diag = try {
                     exec("JSON.stringify(Array.from(document.querySelectorAll('.el-form-item label')).map(function(l){return l.textContent.trim();}))")
                 } catch (e: Exception) { "[]" }
-                throw PortalAutomationException("No se encontró el campo \"Nombre del Canal\" en Ajuste OSD. Etiquetas visibles: $diag")
+                throw PortalAutomationException("No se encontró el campo \"Nombre del Canal\" en Ajustes OSD. Etiquetas visibles: $diag")
             }
         }
 
         delay(300)
-        val saved = exec("""(function(){ var btn = ${findButtonByTextJs("Guardar")}; if (btn) { btn.click(); return true; } return false; })()""") == "true"
-        if (!saved) throw PortalAutomationException("No se encontró el botón Guardar en Ajuste OSD.")
+        if (!clickSaveButton()) {
+            throw PortalAutomationException("No se encontró un botón para guardar en Ajustes OSD.")
+        }
         delay(1200)
     }
 
@@ -363,7 +399,7 @@ class HikvisionPortalAutomation(private val activity: Activity) {
     // no aparece ninguno tras varios pasos, se reporta como no confirmado
     // en vez de asumir que se aplicó igual.
     private suspend fun advanceWizardToFinish(maxSteps: Int = 6): Boolean {
-        val finishWords = listOf("Finalizar", "Completar", "Terminar", "Guardar", "Aplicar", "Confirmar")
+        val finishWords = listOf("Finalizar", "Completar", "Terminar", "Guardar", "Aplicar", "Aceptar", "Confirmar")
         repeat(maxSteps) {
             val wordsJs = finishWords.joinToString(",") { w -> jsStr(w) }
             val clickedFinish = exec(
