@@ -504,21 +504,29 @@ async function tryIsapiFullFlow(win, { deviceName, targetIp, targetMask, targetG
 // cambio de inmediato (mismo mecanismo que la contraseña, que sabemos que
 // funciona) — no hace falta pasar por ningún asistente de varios pasos.
 async function setDeviceNameInSystemInfo(win, deviceName) {
-  if (!(await clickSettingsGearVerified(win, bodyIncludesJs('Sistema')))) {
+  if (!(await clickSettingsGearVerified(win, hashIncludesJs('config')))) {
     throw new Error('No se encontró el ícono de "Configuración" (rueda dentada) en el panel de la cámara.');
   }
   await new Promise(r => setTimeout(r, 500));
 
-  const steps = [
-    { label: 'Sistema', verify: hashIncludesJs('system') },
-    { label: 'Configuración del Sistema', verify: `${hashIncludesJs('systemsetting')} || ${bodyIncludesJs('Nombre de dispositivo')}` }
-  ];
-  for (const step of steps) {
-    if (!(await clickMenuTextVerified(win, step.label, step.verify, 3, { excludeTabs: true }))) {
-      throw new Error(`No se encontró "${step.label}" en el panel de la cámara.`);
-    }
-    await new Promise(r => setTimeout(r, 500));
+  // "Sistema" SÍ es clickeable (confirmado por el técnico contra la
+  // cámara real): despliega el acordeón que revela "Configuración del
+  // sistema" / "Administración de cuentas". La navegación por hash que se
+  // usa para el paso siguiente NO sirve acá porque desplegar un acordeón
+  // no cambia location.hash — solo cambia qué texto es visible en el
+  // sidebar — por eso este paso puntual verifica por texto (normalizado,
+  // sin distinguir mayúsculas/acentos) en vez de por hash.
+  if (!(await clickMenuTextVerified(win, 'Sistema', `${bodyIncludesJs('Configuración del sistema')} || ${bodyIncludesJs('Administración de cuentas')}`, 3, { excludeTabs: true }))) {
+    throw new Error('No se encontró "Sistema" en el panel de la cámara.');
   }
+  await new Promise(r => setTimeout(r, 500));
+
+  // "Configuración del Sistema" sí navega de verdad (cambia location.hash
+  // a algo con "systemsetting", confirmado en captura real de la cámara).
+  if (!(await clickMenuTextVerified(win, 'Configuración del Sistema', `${hashIncludesJs('systemsetting')} || ${bodyIncludesJs('Nombre de dispositivo')}`, 3, { excludeTabs: true }))) {
+    throw new Error('No se encontró "Configuración del Sistema" en el panel de la cámara.');
+  }
+  await new Promise(r => setTimeout(r, 500));
   await clickMenuText(win, 'Información Básica'); // por si no quedó seleccionada por defecto
   await new Promise(r => setTimeout(r, 500));
 
@@ -563,20 +571,20 @@ async function setDeviceNameInSystemInfo(win, deviceName) {
 // "Camera" por el nombre del dispositivo, dejando el número tal cual
 // venía (pedido explícito: no reformatear el sufijo).
 async function setOsdChannelNames(win, deviceName) {
-  if (!(await clickSettingsGearVerified(win, bodyIncludesJs('Imagen')))) {
+  if (!(await clickSettingsGearVerified(win, hashIncludesJs('config')))) {
     throw new Error('No se encontró el ícono de "Configuración" (rueda dentada) en el panel de la cámara.');
   }
   await new Promise(r => setTimeout(r, 500));
 
-  // No se conoce de antemano el slug de ruta interna para "Imagen" (a
-  // diferencia de "system", confirmado en capturas reales) — se deja
-  // verify sin texto de sidebar (ese quedó demostrado poco confiable, ver
-  // comentario en clickVerified) y se apoya en la detección genérica de
-  // cambio de location.hash que hace clickVerified cuando no recibe
-  // verifyJs.
+  // Confirmado por el técnico: la ruta de sidebar es rueda dentada →
+  // Imagen directo, un solo click (no hay un ítem intermedio tipo
+  // "Configuración de Imagen" como sí lo hay para Sistema). No se conoce
+  // de antemano el slug de ruta interna para "Imagen" (a diferencia de
+  // "system", confirmado en capturas reales) — se apoya en la detección
+  // genérica de cambio de location.hash que hace clickVerified cuando no
+  // recibe verifyJs.
   const steps = [
-    { label: 'Imagen', verify: null },
-    { label: ['Ajustes OSD', 'Ajuste OSD'], verify: null }
+    { label: 'Imagen', verify: null }
   ];
   for (const step of steps) {
     if (!(await clickMenuTextVerified(win, step.label, step.verify, 3, { excludeTabs: true }))) {
@@ -584,6 +592,14 @@ async function setOsdChannelNames(win, deviceName) {
     }
     await new Promise(r => setTimeout(r, 500));
   }
+
+  // "Ajustes OSD" es una pestaña dentro del contenido de Imagen (mismo
+  // patrón que "Información Básica" dentro de Configuración del Sistema),
+  // no otro ítem del sidebar — se clickea sin excludeTabs ni verificación
+  // estricta; el chequeo de contenido real de abajo es el que confirma si
+  // realmente se llegó.
+  await clickMenuText(win, ['Ajustes OSD', 'Ajuste OSD']);
+  await new Promise(r => setTimeout(r, 500));
 
   const onPage = await waitFor(win, `
     document.body.textContent.toUpperCase().includes('OSD') ||
