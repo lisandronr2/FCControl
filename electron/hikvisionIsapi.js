@@ -262,15 +262,17 @@ async function clickSettingsGear(win) {
 
 // Genera una condición JS que busca `needle` en el texto del panel
 // ignorando mayúsculas/minúsculas y acentos — misma normalización que usa
-// clickMenuTextJs para encontrar el elemento a clickear. Comparar en crudo
-// (textContent.includes('Sistema')) es frágil: el HTML real de la cámara
-// mezcla casing ("Configuración del sistema" con s minúscula, por ejemplo)
-// y un desajuste de mayúsculas hacía que la verificación post-click fallara
-// SIEMPRE aunque el click hubiera funcionado, disparando reintentos que
-// abrían/cerraban acordeones del menú hasta agotar los intentos.
+// clickMenuTextJs para encontrar el elemento a clickear.
 function bodyIncludesJs(needle) {
   const norm = s => (s || '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
   return `document.body.textContent.toUpperCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').includes(${JSON.stringify(norm(needle))})`;
+}
+
+// Igual que bodyIncludesJs pero mirando location.hash — la ruta interna
+// (ej. "#/config/system/systemSetting/basicInfo") en vez del texto
+// visible del panel.
+function hashIncludesJs(needle) {
+  return `location.hash.toUpperCase().includes(${JSON.stringify(needle.toUpperCase())})`;
 }
 
 // Un solo click no siempre "pega" (una transición CSS, un toast de "Guardado"
@@ -278,24 +280,31 @@ function bodyIncludesJs(needle) {
 // fallar varios pasos después con un error confuso, se verifica que el click
 // realmente haya llevado a la pantalla esperada y, si no, se reintenta.
 //
-// Antes de clickear, chequea si el estado buscado YA está presente (por
-// ejemplo, si "Sistema" quedó expandido de una navegación previa en la
-// misma sesión). Items tipo submenú/acordeón alternan abierto↔cerrado con
-// cada click — si el reintento clickeara un ítem que ya está en el estado
-// correcto, lo cerraría en vez de abrirlo, y la propia verificación
-// posterior fallaría por esa razón (no porque no se haya encontrado el
-// ítem), agotando los reintentos con el menú abriéndose y cerrándose.
+// IMPORTANTE (bug real encontrado en producción): el sidebar de
+// Configuración de esta cámara es ESTÁTICO — "Sistema" siempre muestra
+// sus subítems ("Configuración del sistema", "Administración de
+// cuentas") como texto, esté o no esa sección activa en el panel
+// principal. Verificar contra texto del sidebar (document.body.textContent)
+// para saber si una navegación "pegó" es inválido: ese texto ya está
+// presente ANTES de clickear, así que una verificación basada en texto
+// del sidebar siempre da falso positivo y el click real nunca llega a
+// pasar — la URL se queda en la pantalla anterior aunque el código crea
+// que avanzó. La señal confiable de que sí se navegó es el cambio de
+// location.hash (la SPA cambia de ruta interna al cambiar de sección),
+// así que cada intento captura el hash ANTES del click y exige que haya
+// cambiado, además de cualquier verifyJs adicional que se le pase.
 async function clickVerified(win, clickFn, verifyJs, attempts = 3) {
-  if (verifyJs) {
-    const already = await exec(win, verifyJs).catch(() => false);
-    if (already) return true;
-  }
   for (let i = 0; i < attempts; i++) {
+    const beforeHash = await exec(win, 'location.hash').catch(() => null);
     const clicked = await clickFn();
     if (clicked) {
-      if (!verifyJs) return true;
-      const ok = await waitFor(win, verifyJs, 2500, 200);
-      if (ok) return true;
+      const hashChanged = await waitFor(win, `location.hash !== ${JSON.stringify(beforeHash)}`, 2000, 150);
+      if (!verifyJs) {
+        if (hashChanged) return true;
+      } else {
+        const ok = await waitFor(win, verifyJs, 2500, 200);
+        if (ok) return true;
+      }
     }
     await new Promise(r => setTimeout(r, 500));
   }
@@ -333,8 +342,8 @@ async function setDeviceNameInSystemInfo(win, deviceName) {
   await new Promise(r => setTimeout(r, 500));
 
   const steps = [
-    { label: 'Sistema', verify: `${bodyIncludesJs('Configuración del sistema')} || ${bodyIncludesJs('Administración de cuentas')}` },
-    { label: 'Configuración del Sistema', verify: `${bodyIncludesJs('Información')} || ${bodyIncludesJs('Nombre de dispositivo')}` }
+    { label: 'Sistema', verify: hashIncludesJs('system') },
+    { label: 'Configuración del Sistema', verify: `${hashIncludesJs('systemsetting')} || ${bodyIncludesJs('Nombre de dispositivo')}` }
   ];
   for (const step of steps) {
     if (!(await clickMenuTextVerified(win, step.label, step.verify, 3, { excludeTabs: true }))) {
@@ -391,9 +400,15 @@ async function setOsdChannelNames(win, deviceName) {
   }
   await new Promise(r => setTimeout(r, 500));
 
+  // No se conoce de antemano el slug de ruta interna para "Imagen" (a
+  // diferencia de "system", confirmado en capturas reales) — se deja
+  // verify sin texto de sidebar (ese quedó demostrado poco confiable, ver
+  // comentario en clickVerified) y se apoya en la detección genérica de
+  // cambio de location.hash que hace clickVerified cuando no recibe
+  // verifyJs.
   const steps = [
-    { label: 'Imagen', verify: `${bodyIncludesJs('Ajustes OSD')} || ${bodyIncludesJs('Ajuste OSD')}` },
-    { label: ['Ajustes OSD', 'Ajuste OSD'], verify: `${bodyIncludesJs('OSD')} || ${bodyIncludesJs('Nombre del Canal')}` }
+    { label: 'Imagen', verify: null },
+    { label: ['Ajustes OSD', 'Ajuste OSD'], verify: null }
   ];
   for (const step of steps) {
     if (!(await clickMenuTextVerified(win, step.label, step.verify, 3, { excludeTabs: true }))) {
