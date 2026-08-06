@@ -412,11 +412,16 @@ class HikvisionPortalAutomation(private val activity: Activity) {
                     throw PortalAutomationException("No se encontró la pestaña del canal $ch en Ajustes OSD.")
                 }
                 delay(500)
+                // Los valores actuales (Camera 01/02, etc.) se cargan de
+                // forma asíncrona al entrar a la pantalla o cambiar de canal
+                // — confirmado que sin esperar, los campos están vacíos.
+                waitFor("Array.from(document.querySelectorAll('input')).some(function(i){ return i.value && i.value.trim() !== ''; })", 4000, 300)
                 if (!setChannelName(ch.toString())) {
                     throw PortalAutomationException("No se encontró el campo \"Nombre del Canal\" para el canal $ch.")
                 }
             }
         } else {
+            waitFor("Array.from(document.querySelectorAll('input')).some(function(i){ return i.value && i.value.trim() !== ''; })", 4000, 300)
             if (!setChannelName("")) {
                 val diag = try {
                     exec("JSON.stringify(Array.from(document.querySelectorAll('input')).map(function(i){return {type:i.type,value:i.value};}))")

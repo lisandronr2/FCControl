@@ -393,10 +393,15 @@ async function setOsdChannelNames(win, deviceName) {
       `);
       if (!clicked) throw new Error(`No se encontró la pestaña del canal ${ch} en Ajustes OSD.`);
       await new Promise(r => setTimeout(r, 500));
+      // Los valores actuales (Camera 01/02, etc.) se cargan de forma
+      // asíncrona al entrar a la pantalla o cambiar de canal — confirmado
+      // que sin esperar, los campos todavía están vacíos cuando se los lee.
+      await waitFor(win, `Array.from(document.querySelectorAll('input')).some(i => i.value && i.value.trim() !== '')`, 4000, 300);
       const set = await setChannelName(String(ch));
       if (!set) throw new Error(`No se encontró el campo "Nombre del Canal" para el canal ${ch}.`);
     }
   } else {
+    await waitFor(win, `Array.from(document.querySelectorAll('input')).some(i => i.value && i.value.trim() !== '')`, 4000, 300);
     const set = await setChannelName('');
     if (!set) {
       const diag = await exec(win, `JSON.stringify(Array.from(document.querySelectorAll('input')).map(i => ({type: i.type, value: i.value})))`).catch(() => '[]');
