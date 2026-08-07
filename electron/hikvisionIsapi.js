@@ -142,8 +142,30 @@ async function navigateAndWaitForPortal(win, accessIp, path) {
 // cierre; si no aparece ninguno tras varios pasos, se lo reporta como
 // no confirmado en vez de asumir que se aplicó igual.
 async function advanceWizardToFinish(win, maxSteps = 6) {
+  // Prioriza "Siguiente" cuando existe: que ese botón esté presente es la
+  // señal más confiable de "todavía no es el paso final". Buscar palabras
+  // de cierre (Guardar/Aplicar/Aceptar/etc.) ANTES que "Siguiente" — como
+  // hacía la versión anterior — es lo que causaba que el wizard se diera
+  // por "terminado" prematuramente: pasos intermedios de este asistente
+  // también pueden tener botones con esas palabras genéricas (ej. un
+  // "Aplicar" de una sub-sección), y clickear ese en vez del de cierre
+  // real deja el cambio de IP sin aplicar aunque el código reporte éxito.
   const FINISH_WORDS = ['Finalizar', 'Completar', 'Terminar', 'Guardar', 'Aplicar', 'Aceptar', 'Confirmar'];
   for (let step = 0; step < maxSteps; step++) {
+    const clickedNext = await exec(win, `
+      (function(){
+        const btn = ${findButtonByTextJs('Siguiente')};
+        if (btn) { btn.click(); return true; }
+        return false;
+      })()
+    `);
+    if (clickedNext) {
+      await new Promise(r => setTimeout(r, 1200));
+      continue;
+    }
+
+    // No hay "Siguiente" visible — recién ahí se asume que este es el
+    // paso final y se busca el botón que realmente confirma los cambios.
     const clickedFinish = await exec(win, `
       (function(){
         const words = ${JSON.stringify(FINISH_WORDS)};
@@ -159,16 +181,7 @@ async function advanceWizardToFinish(win, maxSteps = 6) {
       await new Promise(r => setTimeout(r, 1500));
       return true;
     }
-
-    const clickedNext = await exec(win, `
-      (function(){
-        const btn = ${findButtonByTextJs('Siguiente')};
-        if (btn) { btn.click(); return true; }
-        return false;
-      })()
-    `);
-    if (!clickedNext) return false; // no hay más botones para avanzar
-    await new Promise(r => setTimeout(r, 1200));
+    return false; // ni "Siguiente" ni un botón de cierre — no hay más por dónde avanzar
   }
   return false;
 }
@@ -767,13 +780,19 @@ async function setOsdChannelNames(win, deviceName) {
 
       const result = await setChannelName(String(ch), prevWrittenValue);
       if (!result || !result.ok) throw new Error(`No se encontró el campo "Nombre del Canal" para el canal ${ch}.`);
-      prevWrittenValue = result.newVal;
+      const writtenValue = result.newVal;
 
       await new Promise(r => setTimeout(r, 300));
       if (!(await clickSaveButton(win))) {
         throw new Error(`No se encontró un botón para guardar el canal ${ch} en Ajustes OSD.`);
       }
-      await new Promise(r => setTimeout(r, 1200));
+      // Confirma que el campo sigue mostrando el valor escrito después de
+      // guardar (por si el panel recarga/revalida los datos al guardar)
+      // antes de cambiar de canal — evita una carrera entre el guardado
+      // y el click de la siguiente pestaña.
+      await waitFor(win, `Array.from(document.querySelectorAll('input')).some(i => (i.value||'').trim() === ${JSON.stringify(writtenValue)})`, 3000, 200);
+      await new Promise(r => setTimeout(r, 500));
+      prevWrittenValue = writtenValue;
     }
   } else {
     await waitFor(win, `Array.from(document.querySelectorAll('input')).some(i => i.value && i.value.trim() !== '')`, 4000, 300);
