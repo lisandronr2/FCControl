@@ -342,6 +342,7 @@ html, body {
 }
 .dd-badge.done   { background: #E0F3EB; color: #1C6B3A; }
 .dd-badge.pend   { background: #FEF3E1; color: #8A5A06; }
+.dd-badge.tipo-armario { background: #E4E9FB; color: #2C3E8C; margin-right: 4px; }
 .dd-count { font-size: 11px; color: var(--gray); text-align: right; padding: 8px 14px; }
 
 /* Sin resultados */
@@ -883,7 +884,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.33</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.34</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -1374,6 +1375,17 @@ function getModelo(nombre){
   return key ? (result[key] || '') : '';
 }
 
+// Igual patrón que getModelo(): solo devuelve algo si el dispositivo ya
+// se cacheó localmente (se abrió al menos una vez). Se usa para mostrar
+// el Tipo Armario en las listas de búsqueda para nombres tipo CCTV-ARMxx.
+function getTipoArmario(nombre){
+  const cached = getDeviceFromCache(nombre);
+  if (!cached || !cached.result) return '';
+  const result = cached.result;
+  const key = Object.keys(result).find(k => k.toUpperCase().trim() === 'TIPO ARMARIO');
+  return key ? (result[key] || '') : '';
+}
+
 // Verdadero si el Sheet ya tiene un Serial capturado para este dispositivo
 // (sin importar si se capturó hoy o en una sesión previa)
 function hasCapturedSerial(nombre){
@@ -1574,6 +1586,12 @@ function renderValueDropdown(query){
       const val = getCapturedValue(o.value);
       badge = '<span class="dd-badge done">✓ Listo' + (val ? ' · ' + val : '') + '</span>';
     }
+    // Para armarios (nombre contiene "ARM"), mostrar el Tipo Armario si
+    // ya está disponible en caché local (mismo criterio que MODELO).
+    if (mode === 'NOMBRE' && /ARM/i.test(o.value)){
+      const tipo = getTipoArmario(o.value);
+      if (tipo) badge += '<span class="dd-badge tipo-armario">' + tipo + '</span>';
+    }
     item.innerHTML = '<span class="dd-name">' + highlight(o.label, query.trim()) + '</span>' + badge;
     item.addEventListener('mousedown', e => {
       e.preventDefault(); // evita blur antes del click
@@ -1654,6 +1672,9 @@ function executeSelectSearch(mode, val){
       const done   = dayLog.some(l => l.nombre === entry.name) || hasCapturedSerialOrMac(entry.name);
       const capturedVal = done ? getCapturedValue(entry.name) : '';
       const modelo = getModelo(entry.name);
+      // Para armarios (nombre contiene "ARM"), mostrar el Tipo Armario si
+      // ya está disponible en caché local (mismo criterio que MODELO).
+      const tipoArmario = /ARM/i.test(entry.name) ? getTipoArmario(entry.name) : '';
       const div    = document.createElement('div');
       div.className = 'results-item results-item--child';
       div.dataset.name = entry.name;
@@ -1661,6 +1682,7 @@ function executeSelectSearch(mode, val){
         '<span class="ri-main">' + entry.name +
           (modelo ? ' <span class="ri-sub">· ' + modelo + '</span>' : '') +
         '</span>' +
+        (tipoArmario ? '<span class="dd-badge tipo-armario">' + tipoArmario + '</span>' : '') +
         '<span class="dd-badge ' + (done ? 'done' : 'pend') + '">' +
           (done ? '✓ Listo' + (capturedVal ? ' · ' + capturedVal : '') : 'Pendiente') +
         '</span>';
