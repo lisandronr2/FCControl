@@ -884,7 +884,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.34</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.35</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -2489,10 +2489,19 @@ function updatePendingBadge() {
   }
 }
 
-async function syncPendingQueue() {
+// silent=true: para reintentos automáticos en segundo plano (al iniciar
+// la app o por el polling periódico) — no marea al técnico con "Sincronizando…"
+// ni con errores repetidos cada vez que reintenta sin éxito; el aviso de
+// éxito ("✓ N sincronizados") sí se muestra siempre, apenas se logra.
+let syncingQueue = false;
+async function syncPendingQueue(opts = {}) {
+  if (syncingQueue) return; // evita que el polling y el evento 'online' se pisen
   const q = getPendingQueue();
   if (!q.length || !navigator.onLine) return;
-  showToast('Sincronizando ' + q.length + ' guardado' + (q.length !== 1 ? 's' : '') + ' pendiente' + (q.length !== 1 ? 's' : '') + '…');
+  syncingQueue = true;
+  if (!opts.silent) {
+    showToast('Sincronizando ' + q.length + ' guardado' + (q.length !== 1 ? 's' : '') + ' pendiente' + (q.length !== 1 ? 's' : '') + '…');
+  }
   const failed = [];
   let synced = 0;
   for (const item of q) {
@@ -2509,14 +2518,28 @@ async function syncPendingQueue() {
     } catch(e) { failed.push(item); }
   }
   savePendingQueue(failed);
-  if (synced)        showToast('✓ ' + synced + ' sincronizados con el Sheet', 'ok');
-  if (failed.length) showToast(failed.length + ' no pudieron sincronizarse', 'err');
+  if (synced)                          showToast('✓ ' + synced + ' sincronizados con el Sheet', 'ok');
+  if (failed.length && !opts.silent)   showToast(failed.length + ' no pudieron sincronizarse', 'err');
+  syncingQueue = false;
 }
+
+// Reintento automático de la cola pendiente — no depende solo del evento
+// 'online' del navegador: ese evento refleja el estado de la interfaz de
+// red del sistema, no si el servidor realmente responde. Si un guardado
+// quedó en cola por un fallo de red "blando" (timeout, WiFi con portal
+// cautivo, etc.) mientras navigator.onLine seguía en true todo el tiempo,
+// ese evento nunca vuelve a dispararse y la cola quedaba huérfana para
+// siempre — confirmado en producción: el técnico veía "los datos ya
+// están en el Sheet" pero el ícono de pendientes nunca desaparecía.
+// Un reintento al abrir la app + un chequeo periódico cubren ese caso sin
+// tener que esperar a una transición real de red.
+setInterval(() => syncPendingQueue({ silent: true }), 30000);
 
 // Inicializar al cargar
 updatePendingBadge();
 updateOfflineBar();
 autoSync();
+syncPendingQueue({ silent: true });
 
 /* ════ Resumen por Serial / MAC (agrupado por CT → Ubicación) ═ */
 let smCol = 'SERIAL';
