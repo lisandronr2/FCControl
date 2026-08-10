@@ -1,6 +1,6 @@
 {
   "name": "fccontrol-mobile",
-  "version": "1.0.35",
+  "version": "1.0.36",
   "private": true,
   "description": "FCControl - wrapper nativo Android/iOS (Capacitor) y Windows (Electron) para configuración asistida de cámaras Hikvision vía ISAPI",
   "main": "electron/main.js",

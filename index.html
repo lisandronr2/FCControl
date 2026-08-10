@@ -791,7 +791,7 @@ html, body {
     <div class="scan-corners"><span></span></div>
     <div class="scan-line"></div>
   </div>
-  <div class="scan-hint">Apuntá la cámara al código de barras o QR del serial</div>
+  <div class="scan-hint" id="scanHint">Apuntá la cámara al código de barras o QR del serial</div>
   <button id="scanCancel" class="scan-cancel-btn">Cancelar</button>
 </div>
 
@@ -884,7 +884,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.35</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.36</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -989,9 +989,12 @@ html, body {
         </div>
         <div class="field" id="macField" style="display:none">
           <label class="lbl" for="fMac">Dirección MAC</label>
-          <input id="fMac" type="text" class="text-f"
-            placeholder="Ej. 44:19:B6:XX:XX:XX"
-            autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
+          <div class="serial-row">
+            <input id="fMac" type="text" class="text-f"
+              placeholder="Ej. 44:19:B6:XX:XX:XX"
+              autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
+            <button id="scanMacBtn" class="scan-trigger" title="Escanear código" type="button">📷</button>
+          </div>
         </div>
         <div class="field" id="estadoField" style="display:none;">
           <label class="lbl" for="fEstado" id="estadoLbl">Estado</label>
@@ -2360,6 +2363,9 @@ $('syncBtn').addEventListener('click', syncAllDevices);
 
 /* ════ Scanner de código de barras / QR (iOS + Android) ══════ */
 let scanner = null;
+// A qué campo va el próximo resultado escaneado — un solo modal/instancia
+// de cámara se reutiliza tanto para Serial Number como para Dirección MAC.
+let scanTarget = 'serial';
 
 // Cuando un serial escaneado le "roba" el serial a otro dispositivo, se
 // guarda acá hasta que se confirme el guardado — recién ahí se limpia el
@@ -2374,14 +2380,19 @@ function stripAimPrefix(text){
   return text.replace(/^\][A-Za-z]\d/, '');
 }
 
-$('scanBtn').addEventListener('click', startScanner);
+$('scanBtn').addEventListener('click', () => startScanner('serial'));
+$('scanMacBtn').addEventListener('click', () => startScanner('mac'));
 $('scanCancel').addEventListener('click', stopScanner);
 
-async function startScanner() {
+async function startScanner(target = 'serial') {
   if (typeof Html5Qrcode === 'undefined') {
     showToast('Librería de escáner no disponible.', 'err');
     return;
   }
+  scanTarget = target;
+  $('scanHint').textContent = target === 'mac'
+    ? 'Apuntá la cámara al código de barras o QR de la MAC'
+    : 'Apuntá la cámara al código de barras o QR del serial';
   $('scanModal').classList.remove('hidden');
   try {
     scanner = new Html5Qrcode('scanRegion', { verbose: false });
@@ -2391,7 +2402,8 @@ async function startScanner() {
       (decodedText) => {
         const scanned = stripAimPrefix(decodedText.trim());
         stopScanner();
-        handleScannedSerial(scanned);
+        if (scanTarget === 'mac') handleScannedMac(scanned);
+        else                      handleScannedSerial(scanned);
       },
       () => {}
     );
@@ -2460,6 +2472,27 @@ function handleScannedSerial(scanned){
   $('fSerial').value = scanned;
   $('fSerial').classList.remove('err');
   $('serialErr').classList.remove('show');
+  showToast('✓ Código escaneado', 'ok');
+}
+
+// La MAC no tiene el mismo mecanismo de "transferencia" que el serial
+// (no se detectan duplicados entre dispositivos) — simplemente confirma
+// antes de pisar un valor ya cargado, y completa el campo.
+function handleScannedMac(scanned){
+  if (!scanned) return;
+  if (!current){ showToast('Selecciona un dispositivo primero.', 'err'); return; }
+
+  const currentName = $('cardName').textContent.trim();
+  const existing = ($('fMac').value || '').trim();
+  if (existing && existing.toUpperCase() !== scanned.toUpperCase()){
+    const overwrite = confirm(
+      '"' + currentName + '" ya tiene la MAC "' + existing + '".\n\n' +
+      '¿Sobrescribirla con el nuevo código escaneado "' + scanned + '"?'
+    );
+    if (!overwrite){ showToast('Escaneo cancelado.', ''); return; }
+  }
+
+  $('fMac').value = scanned;
   showToast('✓ Código escaneado', 'ok');
 }
 
