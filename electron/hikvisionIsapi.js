@@ -35,6 +35,36 @@ async function exec(win, script) {
   return win.webContents.executeJavaScript(script);
 }
 
+// Corre `script` en el frame principal Y en cualquier subframe/iframe de
+// la ventana, devolviendo el primer resultado verdadero. executeJavaScript
+// normal solo corre en el documento de nivel superior — si algo (un
+// diálogo, un asistente) vive dentro de un <iframe> con su propio
+// documento, una consulta al top-level nunca lo va a encontrar aunque el
+// selector/texto sea perfecto. Confirmado en producción: el diálogo
+// "¿Reiniciar el dispositivo?" del asistente de red se resiste a
+// cualquier búsqueda en el documento principal — muy consistente con que
+// el asistente completo viva en un iframe (visualmente se presenta como
+// una "ventana" aparte, con su propio título "Asistente" y chrome propio).
+function allFrames(win) {
+  try {
+    const main = win.webContents.mainFrame;
+    const subtree = main.framesInSubtree || [main];
+    return subtree.length ? subtree : [main];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function execAllFrames(win, script) {
+  for (const frame of allFrames(win)) {
+    try {
+      const result = await frame.executeJavaScript(script);
+      if (result) return result;
+    } catch (e) { /* frame puede haberse destruido o ser cross-origin; se prueba el siguiente */ }
+  }
+  return false;
+}
+
 async function waitFor(win, conditionJs, timeoutMs = 10000, intervalMs = 300) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -208,35 +238,67 @@ async function advanceWizardToFinish(win, maxSteps = 6) {
 // que NO diga "Cancel"/"Cancelar" — con dos botones tipo OK/Cancel,
 // alcanza para identificar el de confirmar sin depender de su idioma
 // o wording exacto.
+const REBOOT_DIALOG_FIND_JS = `
+  Array.from(document.querySelectorAll('*'))
+    .some(el => el.children.length === 0 && /reiniciar|reboot|restart/i.test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80)
+`;
+
+const REBOOT_DIALOG_CLICK_JS = `
+  (function(){
+    const textEl = Array.from(document.querySelectorAll('*'))
+      .find(el => el.children.length === 0 && /reiniciar|reboot|restart/i.test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80);
+    if (!textEl) return false;
+
+    let container = textEl.parentElement;
+    while (container && container !== document.body && !container.querySelector('button, .el-button, [role=button]')) {
+      container = container.parentElement;
+    }
+    if (!container) return false;
+
+    const buttons = Array.from(container.querySelectorAll('button, .el-button, [role=button]'))
+      .filter(b => (b.textContent || '').trim().length > 0);
+    if (!buttons.length) return false;
+
+    const btn = buttons.find(b => !/cancel/i.test((b.textContent || '').trim())) || buttons[0];
+    btn.click();
+    return true;
+  })()
+`;
+
 async function confirmRebootDialogIfPresent(win, timeoutMs = 6000) {
-  const found = await waitFor(win, `
-    Array.from(document.querySelectorAll('*'))
-      .some(el => el.children.length === 0 && /reiniciar|reboot|restart/i.test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80)
-  `, timeoutMs, 250);
-  if (!found) return false;
+  // Busca en TODOS los frames (ver execAllFrames) por si el asistente
+  // vive en un <iframe> propio — una consulta solo al documento
+  // principal nunca lo encontraría en ese caso, sin importar qué tan
+  // bien matchee el texto o el botón.
+  const start = Date.now();
+  let found = false;
+  while (Date.now() - start < timeoutMs) {
+    found = await execAllFrames(win, REBOOT_DIALOG_FIND_JS);
+    if (found) break;
+    await new Promise(r => setTimeout(r, 250));
+  }
 
-  const clicked = await exec(win, `
-    (function(){
-      const textEl = Array.from(document.querySelectorAll('*'))
-        .find(el => el.children.length === 0 && /reiniciar|reboot|restart/i.test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80);
-      if (!textEl) return false;
+  let clicked = false;
+  if (found) {
+    clicked = await execAllFrames(win, REBOOT_DIALOG_CLICK_JS);
+    if (clicked) await new Promise(r => setTimeout(r, 800));
+  }
 
-      let container = textEl.parentElement;
-      while (container && container !== document.body && !container.querySelector('button, .el-button, [role=button]')) {
-        container = container.parentElement;
-      }
-      if (!container) return false;
+  // Respaldo si el click por DOM no confirmó nada (diálogo detectado
+  // pero, por lo que sea, no se pudo clickear el botón desde ningún
+  // frame): un Enter real a nivel de sistema operativo, que en este tipo
+  // de diálogo de confirmación suele estar atado al botón por defecto
+  // (el de confirmar), sin depender en absoluto de encontrar el elemento
+  // en el DOM.
+  if (found && !clicked) {
+    try {
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+      await new Promise(r => setTimeout(r, 800));
+      clicked = true;
+    } catch (e) { /* si sendInputEvent no está disponible, se deja como no confirmado */ }
+  }
 
-      const buttons = Array.from(container.querySelectorAll('button, .el-button, [role=button]'))
-        .filter(b => (b.textContent || '').trim().length > 0);
-      if (!buttons.length) return false;
-
-      const btn = buttons.find(b => !/cancel/i.test((b.textContent || '').trim())) || buttons[0];
-      btn.click();
-      return true;
-    })()
-  `);
-  if (clicked) await new Promise(r => setTimeout(r, 800));
   return clicked;
 }
 
