@@ -196,25 +196,44 @@ async function advanceWizardToFinish(win, maxSteps = 6) {
 }
 
 // Busca un diálogo de confirmación de reinicio (título/texto con
-// "reiniciar"/"reboot"/"restart") y clickea su botón de aceptar (OK/Sí/
-// Aceptar/Confirmar) si aparece. Es "best effort": si no hay diálogo (la
-// cámara aplicó el cambio sin pedir confirmación), no hace nada.
-async function confirmRebootDialogIfPresent(win, timeoutMs = 4000) {
+// "reiniciar"/"reboot"/"restart") y clickea su botón de aceptar si
+// aparece. Es "best effort": si no hay diálogo (la cámara aplicó el
+// cambio sin pedir confirmación), no hace nada.
+//
+// No asume el texto exacto del botón de confirmar (visto "OK" en
+// pantalla, pero no hay garantía de que sea siempre así) — en cambio,
+// ubica el contenedor real del diálogo (subiendo desde el texto
+// "Reiniciar..." hasta el primer ancestro que tenga algún botón
+// adentro, en vez de una cantidad fija de niveles) y clickea el botón
+// que NO diga "Cancel"/"Cancelar" — con dos botones tipo OK/Cancel,
+// alcanza para identificar el de confirmar sin depender de su idioma
+// o wording exacto.
+async function confirmRebootDialogIfPresent(win, timeoutMs = 6000) {
   const found = await waitFor(win, `
-    Array.from(document.querySelectorAll('div, span, p'))
-      .some(el => /reiniciar|reboot|restart/i.test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80)
+    Array.from(document.querySelectorAll('*'))
+      .some(el => el.children.length === 0 && /reiniciar|reboot|restart/i.test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80)
   `, timeoutMs, 250);
   if (!found) return false;
 
   const clicked = await exec(win, `
     (function(){
-      const words = ['OK', 'Ok', 'Sí', 'Si', 'Aceptar', 'Confirmar', 'Yes'];
-      const btn = Array.from(document.querySelectorAll('button, .el-button, [role=button]')).find(b => {
-        const t = (b.textContent || '').trim();
-        return words.some(w => t === w || t.toUpperCase() === w.toUpperCase());
-      });
-      if (btn) { btn.click(); return true; }
-      return false;
+      const textEl = Array.from(document.querySelectorAll('*'))
+        .find(el => el.children.length === 0 && /reiniciar|reboot|restart/i.test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80);
+      if (!textEl) return false;
+
+      let container = textEl.parentElement;
+      while (container && container !== document.body && !container.querySelector('button, .el-button, [role=button]')) {
+        container = container.parentElement;
+      }
+      if (!container) return false;
+
+      const buttons = Array.from(container.querySelectorAll('button, .el-button, [role=button]'))
+        .filter(b => (b.textContent || '').trim().length > 0);
+      if (!buttons.length) return false;
+
+      const btn = buttons.find(b => !/cancel/i.test((b.textContent || '').trim())) || buttons[0];
+      btn.click();
+      return true;
     })()
   `);
   if (clicked) await new Promise(r => setTimeout(r, 800));
