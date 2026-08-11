@@ -661,13 +661,28 @@ async function setOsdChannelNames(win, deviceName) {
   // ¿Cámara de dos canales? Buscamos elementos clickeables (no solo
   // pestañas de Element UI — esta pantalla usa botones sueltos) cuyo
   // texto sea exactamente "1"/"2"/"Canal 1"/"CH1", etc.
-  const channelTabsInfo = await exec(win, `
+  //
+  // Confirmado en producción: los botones de Canal pueden renderizar un
+  // instante DESPUÉS de que el resto de la pantalla de Ajustes OSD ya
+  // pasó el chequeo de "onPage" — una sola consulta justo en ese momento
+  // podía contar solo el Canal 1 (que ya estaba en el DOM) y no
+  // encontrar todavía el Canal 2, cayendo al camino de "cámara de un
+  // solo canal" en una cámara que en realidad tiene dos, dejando el
+  // Canal 2 sin tocar y sin ningún error visible. Se reintenta la
+  // detección un par de veces dándole tiempo a terminar de renderizar
+  // antes de decidir cuántos canales hay.
+  const countChannelTabs = () => exec(win, `
     (function(){
       const all = Array.from(document.querySelectorAll('li, div, span, a, button, [role=tab]'));
       const chTabs = all.filter(t => /^(canal\\s*)?[12]$|^ch\\s*[12]$/i.test((t.textContent || '').trim()));
       return chTabs.length;
     })()
   `);
+  let channelTabsInfo = await countChannelTabs();
+  for (let attempt = 0; attempt < 4 && channelTabsInfo < 2; attempt++) {
+    await new Promise(r => setTimeout(r, 400));
+    channelTabsInfo = await countChannelTabs();
+  }
 
   // Reemplaza solo "Camera" en el valor actual del campo, preservando el
   // resto (típicamente el número de canal) — si por algún motivo el
