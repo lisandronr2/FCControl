@@ -633,7 +633,14 @@ async function setDeviceNameInSystemInfo(win, deviceName) {
 // pestaña dentro de esa pantalla, junto a Mostrar ajustes/Máscara de
 // privacidad/Superposición de imágenes/etc.
 async function setOsdChannelNames(win, deviceName) {
-  if (!(await clickSettingsGearVerified(win, hashIncludesJs('config')))) {
+  // Este es el SEGUNDO click sobre la rueda dentada en la misma sesión
+  // (el primero lo hizo setDeviceNameInSystemInfo unos segundos antes).
+  // Confirmado en producción: justo después de guardar Información
+  // Básica, la cámara puede tardar más de lo que dan 3 intentos rápidos
+  // en volver a mostrar el ícono (recarga de la pantalla, toast de
+  // "Guardado" todavía en pantalla, etc.) — más intentos y más margen
+  // entre cada uno para no reportar "no se encontró" antes de tiempo.
+  if (!(await clickSettingsGearVerified(win, hashIncludesJs('config'), 6))) {
     throw new Error('No se encontró el ícono de "Configuración" (rueda dentada) en el panel de la cámara.');
   }
   await new Promise(r => setTimeout(r, 500));
@@ -914,6 +921,11 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
     // guarda al llegar al final — ver advanceWizardToFinish).
     if (deviceName) {
       await setDeviceNameInSystemInfo(win, deviceName);
+      // Margen extra antes de volver a abrir la rueda dentada — recién
+      // se guardó Información Básica, y esa pantalla puede tardar un
+      // instante en asentarse (toast de "Guardado", posible recarga)
+      // antes de que el ícono vuelva a responder a los clicks.
+      await new Promise(r => setTimeout(r, 800));
       await setOsdChannelNames(win, deviceName);
     }
 
