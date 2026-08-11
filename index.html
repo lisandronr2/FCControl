@@ -780,9 +780,48 @@ html, body {
 .camauto-status.busy, .camauto-status.ok, .camauto-status.err { display: block; }
 .camauto-status.ok  { color: var(--ok); font-weight: 600; }
 .camauto-status.err { color: var(--red); font-weight: 600; }
+
+/* ══ Aviso flotante de credenciales tras configurar automáticamente ══ */
+.creds-float {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  z-index: 500; width: min(360px, calc(100% - 32px));
+  background: var(--ink); color: #fff; border-radius: 14px;
+  padding: 16px 18px; box-shadow: 0 8px 28px rgba(0,0,0,.35);
+  font-family: 'Inter', sans-serif;
+}
+.creds-float.hidden { display: none; }
+.creds-float-title {
+  font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .03em; margin-bottom: 6px;
+  display: flex; align-items: center; gap: 6px;
+}
+.creds-float-txt { font-size: 13px; line-height: 1.5; color: #E8E4DC; margin-bottom: 10px; }
+.creds-float-row {
+  display: flex; justify-content: space-between; align-items: center;
+  background: rgba(255,255,255,.08); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px;
+  font-size: 13px; font-family: monospace;
+}
+.creds-float-close {
+  width: 100%; background: var(--orange); color: #fff; border: none;
+  border-radius: 8px; padding: 9px; margin-top: 4px;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 14px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .03em; cursor: pointer;
+}
 </style>
 </head>
 <body>
+
+<!-- ════════════════ CREDENCIALES POST-CONFIGURACIÓN ════════════════ -->
+<div id="credsFloat" class="creds-float hidden">
+  <div class="creds-float-title">🔑 Cámara reiniciando</div>
+  <div class="creds-float-txt">
+    La configuración quedó aplicada y la cámara se está reiniciando para
+    tomar la nueva IP. Accedé con:
+  </div>
+  <div class="creds-float-row"><span>Usuario</span><strong id="credsFloatUser">admin</strong></div>
+  <div class="creds-float-row"><span>Contraseña</span><strong id="credsFloatPass">Elecnor2026ING</strong></div>
+  <button id="credsFloatClose" class="creds-float-close">Entendido</button>
+</div>
 
 <!-- ════════════════ SCANNER ════════════════ -->
 <div id="scanModal" class="scan-modal hidden">
@@ -884,7 +923,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.40</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.41</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -1922,6 +1961,9 @@ function renderCard(nombre, record, headers, estadoOptions){
    Este modal arma los datos y abre el panel nativo de la cámara
    para que el técnico los pegue manualmente. ═══════════════════ */
 const CAM_CREDS = { user: 'admin', pass: 'Elecnor2026ING' };
+$('credsFloatUser').textContent = CAM_CREDS.user;
+$('credsFloatPass').textContent = CAM_CREDS.pass;
+$('credsFloatClose').addEventListener('click', () => $('credsFloat').classList.add('hidden'));
 
 // Disponible solo dentro del wrapper nativo (Capacitor) con el plugin
 // HikvisionCamera registrado — en el navegador normal esto es undefined
@@ -2035,6 +2077,7 @@ $('camAutoBtn').addEventListener('click', async () => {
       status.textContent = '✓ Cámara configurada — nueva IP: ' + targetIp
         + (applied.probablySucceeded ? ' (la cámara cortó la conexión al cambiar, es normal)' : '');
       showToast('✓ Cámara configurada automáticamente', 'ok');
+      $('credsFloat').classList.remove('hidden');
 
       if (secured.mac && current.macHeader){
         const macResult = await saveMacToSheet(secured.mac);

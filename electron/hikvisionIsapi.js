@@ -179,11 +179,46 @@ async function advanceWizardToFinish(win, maxSteps = 6) {
     `);
     if (clickedFinish) {
       await new Promise(r => setTimeout(r, 1500));
+      // El paso final del asistente de red, al guardar, muestra un
+      // diálogo de confirmación "¿Reiniciar el dispositivo?" — sin
+      // aceptarlo, la cámara nunca aplica el cambio de IP de verdad
+      // (confirmado en producción: el asistente decía "Guardado" pero,
+      // al no confirmarse el reinicio, la IP quedaba como estaba). Se
+      // acepta ese diálogo como parte natural de terminar el asistente,
+      // no se espera a que el reinicio termine — la config ya quedó
+      // aplicada del lado de la cámara en cuanto se confirma.
+      await confirmRebootDialogIfPresent(win);
       return true;
     }
     return false; // ni "Siguiente" ni un botón de cierre — no hay más por dónde avanzar
   }
   return false;
+}
+
+// Busca un diálogo de confirmación de reinicio (título/texto con
+// "reiniciar"/"reboot"/"restart") y clickea su botón de aceptar (OK/Sí/
+// Aceptar/Confirmar) si aparece. Es "best effort": si no hay diálogo (la
+// cámara aplicó el cambio sin pedir confirmación), no hace nada.
+async function confirmRebootDialogIfPresent(win, timeoutMs = 4000) {
+  const found = await waitFor(win, `
+    Array.from(document.querySelectorAll('div, span, p'))
+      .some(el => /reiniciar|reboot|restart/i.test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80)
+  `, timeoutMs, 250);
+  if (!found) return false;
+
+  const clicked = await exec(win, `
+    (function(){
+      const words = ['OK', 'Ok', 'Sí', 'Si', 'Aceptar', 'Confirmar', 'Yes'];
+      const btn = Array.from(document.querySelectorAll('button, .el-button, [role=button]')).find(b => {
+        const t = (b.textContent || '').trim();
+        return words.some(w => t === w || t.toUpperCase() === w.toUpperCase());
+      });
+      if (btn) { btn.click(); return true; }
+      return false;
+    })()
+  `);
+  if (clicked) await new Promise(r => setTimeout(r, 800));
+  return clicked;
 }
 
 // Busca y clickea un elemento de menú/pestaña por su texto visible exacto
