@@ -884,7 +884,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.37</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.38</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -1736,20 +1736,33 @@ $('searchValueInput').addEventListener('keydown', e => {
 });
 
 /* ════ Cargar dispositivo desde el Sheet ═════════════════════ */
+// Se incrementa en cada llamada a loadDevice() — si el técnico navega
+// rápido entre dispositivos (típico con mala señal en estos gabinetes
+// exteriores) y dispara una segunda carga antes de que la primera
+// responda, las dos promesas quedan "en carrera": sin este guard, la que
+// tarde más en responder pisa a "current" al final, sin importar cuál
+// pidió el técnico último — dejando el Serial/MAC escaneado guardándose
+// sobre la fila de OTRO dispositivo (confirmado en producción: ARMxx y
+// los CAMxx de la misma ubicación, navegados en secuencia rápida).
+let loadDeviceSeq = 0;
+
 async function loadDevice(nombre){
+  const seq = ++loadDeviceSeq;
   showToast('Cargando…');
   try {
     const res  = await fetchWithTimeout(apiUrl + '?action=get&nombre=' + encodeURIComponent(nombre));
     const data = await res.json();
+    if (seq !== loadDeviceSeq) return; // una navegación más nueva ya reemplazó este pedido
     if (data.error)   { showToast(data.error, 'err'); return; }
     if (!data.result) { showToast('Dispositivo no encontrado en el Sheet.', 'err'); return; }
     cacheDevice(nombre, data);
-    current = { data: data.result, rowIndex: data.rowIndex, headers: data.headers || [], estadoHeader: null };
+    current = { name: nombre, data: data.result, rowIndex: data.rowIndex, headers: data.headers || [], estadoHeader: null };
     renderCard(nombre, data.result, data.headers || [], data.estadoOptions || []);
   } catch(e){
+    if (seq !== loadDeviceSeq) return; // ídem: no pisar una carga más nueva con un error viejo
     const cached = getDeviceFromCache(nombre);
     if (cached) {
-      current = { data: cached.result, rowIndex: cached.rowIndex, headers: cached.headers || [], estadoHeader: null };
+      current = { name: nombre, data: cached.result, rowIndex: cached.rowIndex, headers: cached.headers || [], estadoHeader: null };
       renderCard(nombre, cached.result, cached.headers || [], cached.estadoOptions || []);
       showToast('📥 Sin red — datos desde caché local', '');
     } else {
@@ -2094,6 +2107,17 @@ $('camMacSave').addEventListener('click', async () => {
 /* ════ Guardar serial en el Sheet ════════════════════════════ */
 $('saveBtn').addEventListener('click', async () => {
   if (!current){ showToast('Selecciona un dispositivo primero.', 'err'); return; }
+
+  // Última barrera de seguridad contra el mismo tipo de desincronización
+  // que loadDeviceSeq previene en el origen: si por lo que sea "current"
+  // (el dispositivo activo internamente) no coincide con el nombre que
+  // se ve en pantalla, NO se guarda — mejor pedir recargar que arriesgar
+  // escribir el Serial/MAC sobre la fila de otro dispositivo.
+  const visibleName = $('cardName').textContent.trim();
+  if (current.name && current.name !== visibleName){
+    showToast('La ficha cambió mientras se cargaba — volvé a abrir el dispositivo antes de guardar.', 'err');
+    return;
+  }
 
   const serial = $('fSerial').value.trim();
   if (!serial){
