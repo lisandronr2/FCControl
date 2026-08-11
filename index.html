@@ -884,7 +884,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.36</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.37</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -2475,13 +2475,24 @@ function handleScannedSerial(scanned){
   showToast('✓ Código escaneado', 'ok');
 }
 
+// Normaliza cualquier variante que traiga la etiqueta/código de barras
+// (sin separadores, con guiones, con espacios, minúsculas, etc.) al
+// formato genérico XX:XX:XX:XX:XX:XX — se queda solo con los caracteres
+// hexadecimales y los reagrupa de a 2, sin importar cómo vino separado.
+function formatMacAddress(raw){
+  const hex = (raw || '').toUpperCase().replace(/[^0-9A-F]/g, '');
+  if (hex.length !== 12) return (raw || '').trim(); // no son 6 bytes: se deja tal cual, no es una MAC reconocible
+  return hex.match(/.{2}/g).join(':');
+}
+
 // La MAC no tiene el mismo mecanismo de "transferencia" que el serial
 // (no se detectan duplicados entre dispositivos) — simplemente confirma
 // antes de pisar un valor ya cargado, y completa el campo.
-function handleScannedMac(scanned){
-  if (!scanned) return;
+function handleScannedMac(raw){
+  if (!raw) return;
   if (!current){ showToast('Selecciona un dispositivo primero.', 'err'); return; }
 
+  const scanned = formatMacAddress(raw);
   const currentName = $('cardName').textContent.trim();
   const existing = ($('fMac').value || '').trim();
   if (existing && existing.toUpperCase() !== scanned.toUpperCase()){
