@@ -73,17 +73,23 @@ async function waitFor(win, conditionJs, timeoutMs = 10000, intervalMs = 300) {
   return false;
 }
 
-function findInputByLabelJs(labelText) {
-  // Los formularios de Omada son filas "label a la izquierda, input a la
+function findLabelValueCellJs(labelText) {
+  // Los formularios de Omada son filas "label a la izquierda, valor a la
   // derecha" sin agrupación semántica clara (no hay <label for=...>) — se
-  // busca el texto de la etiqueta y se toma el input/select más cercano
-  // en la misma fila.
+  // busca el texto de la etiqueta y se toma la celda HERMANA siguiente
+  // como valor.
   // Confirmado con captura de diagnóstico real: la etiqueta en el DOM es
   // "Device Name" SIN los dos puntos — el ":" se agrega visualmente por
   // CSS (patrón típico de esta UI clásica basada en tablas), no es texto
-  // real. Comparar con el ":" incluido nunca iba a matchear nada. Se
-  // normalizan los dos puntos finales de AMBOS lados antes de comparar,
-  // así funciona sin importar si el firmware los pone en el DOM o no.
+  // real. Se normalizan los dos puntos finales de AMBOS lados antes de
+  // comparar.
+  // Bug real confirmado en producción: la versión anterior buscaba un
+  // <input>/<select> con querySelector subiendo varios ancestros — en
+  // filas de SOLO LECTURA (MAC Address, Serial Number, etc., que no
+  // tienen ningún <input>, solo texto) terminaba agarrando el <input> de
+  // OTRA fila (Device Name) por estar en el mismo contenedor. Ahora se
+  // sube únicamente hasta encontrar la celda con un hermano siguiente, y
+  // se usa ESE hermano — nunca la subrama completa de un ancestro lejano.
   const norm = s => (s || '').trim().replace(/:\s*$/, '');
   return `
     (function(){
@@ -91,13 +97,13 @@ function findInputByLabelJs(labelText) {
       const all = Array.from(document.querySelectorAll('*'));
       const lbl = all.find(el => el.children.length === 0 && (el.textContent || '').trim().replace(/:\\s*$/, '') === target);
       if (!lbl) return null;
-      let row = lbl;
-      for (let i = 0; i < 5 && row; i++) {
-        const field = row.querySelector('input, select');
-        if (field) return field;
-        row = row.parentElement;
+      let cell = lbl;
+      let hops = 0;
+      while (cell && !cell.nextElementSibling && cell.parentElement && cell.parentElement !== document.body && hops < 5) {
+        cell = cell.parentElement;
+        hops++;
       }
-      return null;
+      return cell ? cell.nextElementSibling : null;
     })()
   `;
 }
@@ -105,7 +111,9 @@ function findInputByLabelJs(labelText) {
 async function setFieldByLabel(win, labelText, value) {
   return execAnyFrame(win, `
     (function(){
-      const field = ${findInputByLabelJs(labelText)};
+      const cell = ${findLabelValueCellJs(labelText)};
+      if (!cell) return false;
+      const field = (cell.matches && cell.matches('input, select')) ? cell : cell.querySelector('input, select');
       if (!field) return false;
       if (field.tagName === 'SELECT') {
         const opt = Array.from(field.options).find(o => o.textContent.trim() === ${JSON.stringify(value)} || o.value === ${JSON.stringify(value)});
@@ -123,8 +131,11 @@ async function setFieldByLabel(win, labelText, value) {
 async function getFieldByLabel(win, labelText) {
   return execAnyFrame(win, `
     (function(){
-      const field = ${findInputByLabelJs(labelText)};
-      return field ? (field.value || '').trim() : null;
+      const cell = ${findLabelValueCellJs(labelText)};
+      if (!cell) return null;
+      const field = (cell.matches && cell.matches('input, select')) ? cell : cell.querySelector('input, select');
+      if (field) return (field.value || '').trim();
+      return (cell.textContent || '').trim();
     })()
   `, r => r !== null && r !== undefined);
 }
@@ -258,6 +269,11 @@ async function dumpDiagnostics(win, label) {
 }
 
 // Diálogos de confirmación tipo "Confirm submission?" (OK/Cancel).
+// Confirmado con captura real: al igual que "Login" y los enlaces del
+// menú, los botones de este diálogo no son necesariamente <button> — hay
+// que buscarlos igual que en findButtonByTextJs (button/[role=button]/a/
+// input[type=submit|button]), y subir más de un nivel de ancestro porque
+// el contenedor del modal puede estar varios niveles arriba del texto.
 async function confirmDialogIfPresent(win, textHint, timeoutMs = 6000) {
   const findDialogButtonJs = `
     (function(){
@@ -265,13 +281,19 @@ async function confirmDialogIfPresent(win, textHint, timeoutMs = 6000) {
       const textEl = all.find(el => el.children.length === 0 && new RegExp(${JSON.stringify(textHint)}, 'i').test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80);
       if (!textEl) return null;
       let container = textEl.parentElement;
-      while (container && container !== document.body && !container.querySelector('button')) {
+      let hops = 0;
+      while (container && container !== document.body && hops < 8) {
+        const candidates = Array.from(container.querySelectorAll('button, [role=button], a, input[type=submit], input[type=button]'))
+          .filter(b => (b.textContent || b.value || '').trim().length > 0);
+        if (candidates.length) {
+          const ok = candidates.find(b => /^ok$/i.test((b.textContent || b.value || '').trim()))
+            || candidates.find(b => !/cancel/i.test((b.textContent || b.value || '').trim()));
+          if (ok) return ok;
+        }
         container = container.parentElement;
+        hops++;
       }
-      if (!container) return null;
-      const buttons = Array.from(container.querySelectorAll('button')).filter(b => (b.textContent || '').trim().length > 0);
-      if (!buttons.length) return null;
-      return buttons.find(b => !/cancel/i.test((b.textContent || '').trim())) || buttons[0];
+      return null;
     })()
   `;
   return realClick(win, findDialogButtonJs, timeoutMs);
@@ -448,11 +470,13 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
         throw new Error('No se encontró el botón "Apply" en IP Settings.');
       }
       await new Promise(r => setTimeout(r, 800));
-      const confirmed = await confirmDialogIfPresent(win, 'confirm', 5000);
+      const confirmed = await confirmDialogIfPresent(win, 'confirm', 6000);
       if (!confirmed) {
-        // Algunos firmwares aplican la IP sin pedir confirmación extra —
-        // no se trata como error duro, solo se deja constancia.
-        console.warn(`Switch ${accessIp}: no apareció diálogo de confirmación al aplicar IP Settings (puede ser normal en este firmware).`);
+        // Este diálogo es el que efectivamente dispara el reinicio del
+        // switch con los datos nuevos — si no se pudo confirmar, el
+        // cambio de IP quedó a medio aplicar en el dispositivo real, así
+        // que se trata como error duro (antes se ignoraba en silencio).
+        throw new Error('No se pudo confirmar el diálogo "Confirm submission?" en IP Settings — el switch no se reinició con los datos nuevos.');
       }
       await new Promise(r => setTimeout(r, 1500));
     }
