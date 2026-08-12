@@ -106,37 +106,23 @@ function findButtonByTextJs(text) {
   return `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === ${JSON.stringify(text)} || b.textContent.trim().includes(${JSON.stringify(text)}))`;
 }
 
-async function clickButton(win, text) {
-  return exec(win, `
-    (function(){
-      const btn = ${findButtonByTextJs(text)};
-      if (btn) { btn.click(); return true; }
-      return false;
-    })()
-  `);
-}
-
-// Diálogos de confirmación tipo "Confirm submission?" (OK/Cancel) — mismo
-// enfoque que confirmRebootDialogIfPresent en hikvisionIsapi.js: un click
-// disparado por JS (btn.click()) puede ser ignorado por apps que solo
-// aceptan eventos de confianza (event.isTrusted). Se ubica el botón por
-// DOM solo para calcular SUS COORDENADAS, y el click real se hace con
-// sendInputEvent (indistinguible de un click real de mouse del sistema).
-async function confirmDialogIfPresent(win, textHint, timeoutMs = 6000) {
+// TODO CLICK EN ESTE MÓDULO PASA POR ACÁ — nunca btn.click() de JS.
+// Confirmado en producción (captura real: usuario/contraseña quedaban
+// bien escritos en la pantalla de login, pero el click en "Login" no
+// hacía nada — se quedaba trabado ahí para siempre): esta app de Omada
+// ignora clicks disparados por JavaScript (event.isTrusted === false).
+// Se ubica el elemento por DOM (buscando en todos los frames, por si
+// vive en un <iframe>) solo para calcular SUS COORDENADAS, y el click en
+// sí se hace con sendInputEvent — indistinguible de un click real de
+// mouse del sistema operativo. Misma lección aprendida con el diálogo de
+// reinicio del asistente de red de las cámaras Hikvision.
+async function realClick(win, findElJs, timeoutMs = 6000) {
   const findRectJs = `
     (function(){
-      const all = Array.from(document.querySelectorAll('*'));
-      const textEl = all.find(el => el.children.length === 0 && new RegExp(${JSON.stringify(textHint)}, 'i').test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80);
-      if (!textEl) return null;
-      let container = textEl.parentElement;
-      while (container && container !== document.body && !container.querySelector('button')) {
-        container = container.parentElement;
-      }
-      if (!container) return null;
-      const buttons = Array.from(container.querySelectorAll('button')).filter(b => (b.textContent || '').trim().length > 0);
-      if (!buttons.length) return null;
-      const btn = buttons.find(b => !/cancel/i.test((b.textContent || '').trim())) || buttons[0];
-      const r = btn.getBoundingClientRect();
+      const el = ${findElJs};
+      if (!el) return null;
+      if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center' });
+      const r = el.getBoundingClientRect();
       if (!r || r.width === 0 || r.height === 0) return null;
       return JSON.stringify({ x: r.x, y: r.y, width: r.width, height: r.height });
     })()
@@ -162,8 +148,32 @@ async function confirmDialogIfPresent(win, textHint, timeoutMs = 6000) {
   win.webContents.sendInputEvent({ type: 'mouseDown', x: clickX, y: clickY, button: 'left', clickCount: 1 });
   await new Promise(r => setTimeout(r, 60));
   win.webContents.sendInputEvent({ type: 'mouseUp', x: clickX, y: clickY, button: 'left', clickCount: 1 });
-  await new Promise(r => setTimeout(r, 800));
+  await new Promise(r => setTimeout(r, 400));
   return true;
+}
+
+async function clickButton(win, text, timeoutMs = 2000) {
+  return realClick(win, findButtonByTextJs(text), timeoutMs);
+}
+
+// Diálogos de confirmación tipo "Confirm submission?" (OK/Cancel).
+async function confirmDialogIfPresent(win, textHint, timeoutMs = 6000) {
+  const findDialogButtonJs = `
+    (function(){
+      const all = Array.from(document.querySelectorAll('*'));
+      const textEl = all.find(el => el.children.length === 0 && new RegExp(${JSON.stringify(textHint)}, 'i').test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80);
+      if (!textEl) return null;
+      let container = textEl.parentElement;
+      while (container && container !== document.body && !container.querySelector('button')) {
+        container = container.parentElement;
+      }
+      if (!container) return null;
+      const buttons = Array.from(container.querySelectorAll('button')).filter(b => (b.textContent || '').trim().length > 0);
+      if (!buttons.length) return null;
+      return buttons.find(b => !/cancel/i.test((b.textContent || '').trim())) || buttons[0];
+    })()
+  `;
+  return realClick(win, findDialogButtonJs, timeoutMs);
 }
 
 async function navigateAndWait(win, accessIp) {
