@@ -163,74 +163,6 @@ async function navigateAndWaitForPortal(win, accessIp, path) {
   }
 }
 
-// El asistente es lineal y de varios pasos: escribir la IP y avanzar UNA
-// vez a la siguiente pantalla no alcanza para que la cámara aplique nada
-// — confirmado contra hardware real (la contraseña, que se aplica desde
-// una pantalla de acción directa, sí quedó puesta; la IP, completada a
-// mitad del asistente y luego abandonada, no). Hay que llegar hasta el
-// paso final del asistente y confirmarlo ahí. Como no sabemos de
-// antemano cuántos pasos quedan ni la etiqueta exacta del botón
-// final, se sigue avanzando y buscando en cada pantalla un botón de
-// cierre; si no aparece ninguno tras varios pasos, se lo reporta como
-// no confirmado en vez de asumir que se aplicó igual.
-async function advanceWizardToFinish(win, maxSteps = 6) {
-  // Prioriza "Siguiente" cuando existe: que ese botón esté presente es la
-  // señal más confiable de "todavía no es el paso final". Buscar palabras
-  // de cierre (Guardar/Aplicar/Aceptar/etc.) ANTES que "Siguiente" — como
-  // hacía la versión anterior — es lo que causaba que el wizard se diera
-  // por "terminado" prematuramente: pasos intermedios de este asistente
-  // también pueden tener botones con esas palabras genéricas (ej. un
-  // "Aplicar" de una sub-sección), y clickear ese en vez del de cierre
-  // real deja el cambio de IP sin aplicar aunque el código reporte éxito.
-  const FINISH_WORDS = ['Finalizar', 'Completar', 'Terminar', 'Guardar', 'Aplicar', 'Aceptar', 'Confirmar'];
-  for (let step = 0; step < maxSteps; step++) {
-    const clickedNext = await exec(win, `
-      (function(){
-        const btn = ${findButtonByTextJs('Siguiente')};
-        if (btn) { btn.click(); return true; }
-        return false;
-      })()
-    `);
-    if (clickedNext) {
-      await new Promise(r => setTimeout(r, 1200));
-      continue;
-    }
-
-    // No hay "Siguiente" visible — recién ahí se asume que este es el
-    // paso final y se busca el botón que realmente confirma los cambios.
-    const clickedFinish = await exec(win, `
-      (function(){
-        const words = ${JSON.stringify(FINISH_WORDS)};
-        const btn = Array.from(document.querySelectorAll('button')).find(b => {
-          const t = b.textContent.trim();
-          return words.some(w => t.includes(w));
-        });
-        if (btn) { btn.click(); return true; }
-        return false;
-      })()
-    `);
-    if (clickedFinish) {
-      await new Promise(r => setTimeout(r, 1500));
-      // El paso final del asistente de red, al guardar, muestra un
-      // diálogo de confirmación "¿Reiniciar el dispositivo?" — sin
-      // aceptarlo, la cámara nunca aplica el cambio de IP de verdad
-      // (confirmado en producción: el asistente decía "Guardado" pero,
-      // al no confirmarse el reinicio, la IP quedaba como estaba). Se
-      // acepta ese diálogo como parte natural de terminar el asistente,
-      // no se espera a que el reinicio termine — la config ya quedó
-      // aplicada del lado de la cámara en cuanto se confirma.
-      const rebooted = await confirmRebootDialogIfPresent(win);
-      if (!rebooted) {
-        const dir = await dumpRebootDialogDiagnostics(win);
-        console.warn(`No se pudo confirmar el diálogo de reinicio.${dir ? ` Diagnóstico guardado en: ${dir}` : ''}`);
-      }
-      return true;
-    }
-    return false; // ni "Siguiente" ni un botón de cierre — no hay más por dónde avanzar
-  }
-  return false;
-}
-
 // Busca un diálogo de confirmación de reinicio (título/texto con
 // "reiniciar"/"reboot"/"restart") y CONFIRMA su botón de aceptar con un
 // click de mouse real a nivel de sistema operativo — no un btn.click()
@@ -618,7 +550,7 @@ async function isapiListChannelIds(win) {
 }
 
 // PUT /ISAPI/System/Network/interfaces/{id}/ipAddress — mismo paso que el
-// asistente de red del DOM (advanceWizardToFinish). El orden de campos
+// asistente de red del DOM. El orden de campos
 // típico de este endpoint en firmwares Hikvision es ipVersion, ipAddress,
 // subnetMask, ..., DefaultGateway → <ipAddress> raíz aparece ANTES que el
 // anidado en DefaultGateway, así que replaceXmlTag (que reemplaza solo la
@@ -1055,8 +987,11 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
     // OSD por canal (Imagen → Ajuste OSD, reemplazando "CAMERA") — ambas
     // son pantallas de configuración normal con su propio Guardar que
     // aplica al toque, nada que ver con el asistente rápido. Recién
-    // después, el asistente de red (que si es de varios pasos y solo
-    // guarda al llegar al final — ver advanceWizardToFinish).
+    // después, el asistente de red: IP/máscara/gateway se guardan ya en
+    // el primer paso ("Ajustes red") — ese guardado dispara ahí mismo el
+    // diálogo "¿Reiniciar el dispositivo?", sin necesidad de avanzar por
+    // el resto de los pasos del asistente (hora, OSD, etc., que no se
+    // tocan).
     if (deviceName) {
       await setDeviceNameInSystemInfo(win, deviceName);
       // Margen extra antes de volver a abrir la rueda dentada — recién
@@ -1139,14 +1074,39 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
     `);
     if (!ok) throw new Error('No se encontraron los campos de IP/máscara en el asistente.');
 
-    // El resto del asistente (hora, etc.) se deja sin tocar — avanza solo
-    // hasta encontrar el paso final y confirmarlo ahí.
+    // Confirmado por el técnico contra la cámara real: el diálogo
+    // "¿Reiniciar el dispositivo?" aparece en este mismo paso 1
+    // (Ajustes red), apenas se guarda — NO al final de los 5 pasos del
+    // asistente. El diseño anterior (avanzar con "Siguiente" paso por
+    // paso hasta el último para recién ahí buscar un botón de cierre)
+    // buscaba el diálogo de reinicio en el lugar equivocado por completo;
+    // por eso ningún fix de detección/click lo encontraba, sin importar
+    // qué tan robusto fuera. No hace falta (ni se pidió) tocar el resto
+    // de los pasos (hora, OSD, etc.) — alcanza con guardar este paso.
     await new Promise(r => setTimeout(r, 500));
-    const finished = await advanceWizardToFinish(win);
-    if (!finished) {
-      throw new Error('Se completaron los campos pero no se encontró el paso final del asistente para confirmarlos — la cámara puede no haber aplicado los cambios. Probá de nuevo o revisalo manualmente en el panel de la cámara.');
+    const stepSaved = await exec(win, `
+      (function(){
+        const btn = ${findButtonByTextJs('Siguiente')};
+        if (btn) { btn.click(); return true; }
+        return false;
+      })()
+    `) || await exec(win, `
+      (function(){
+        const words = ['Guardar', 'Aplicar', 'Aceptar', 'Confirmar'];
+        const btn = Array.from(document.querySelectorAll('button')).find(b => words.some(w => b.textContent.trim().includes(w)));
+        if (btn) { btn.click(); return true; }
+        return false;
+      })()
+    `);
+    if (!stepSaved) {
+      throw new Error('No se encontró el botón para guardar los cambios de red en el asistente.');
     }
     await new Promise(r => setTimeout(r, 1500));
+    const rebooted = await confirmRebootDialogIfPresent(win);
+    if (!rebooted) {
+      const dir = await dumpRebootDialogDiagnostics(win);
+      throw new Error(`Se guardaron los cambios de red pero no se pudo confirmar el reinicio del dispositivo — la cámara puede seguir con la IP vieja hasta que se reinicie manualmente.${dir ? ` Diagnóstico guardado en: ${dir}` : ''}`);
+    }
 
     // Mismo problema que se confirmó con el camino ISAPI: el asistente
     // puede reportar "listo" (encontró y clickeó un botón final) sin que
