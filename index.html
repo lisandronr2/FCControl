@@ -838,7 +838,7 @@ html, body {
 <div id="camCfgModal" class="camcfg-modal hidden">
   <div class="camcfg-card">
     <div class="camcfg-head">
-      <div class="camcfg-title">Configurar cámara</div>
+      <div class="camcfg-title" id="camCfgTitle">Configurar cámara</div>
       <button id="camCfgClose" class="camcfg-close">✕</button>
     </div>
     <div id="camAutoSection" class="camauto-section hidden">
@@ -853,7 +853,7 @@ html, body {
     <div class="camcfg-step">
       <div class="camcfg-step-n">1</div>
       <div class="camcfg-step-body">
-        <div class="camcfg-step-title">Acceder al panel de la cámara</div>
+        <div class="camcfg-step-title" id="camStep1Title">Acceder al panel de la cámara</div>
         <div class="camcfg-step-desc">IP de fábrica o actual de la cámara (editable si es distinta)</div>
         <div class="copy-row">
           <input id="camAccessIp" class="copy-field" type="text" value="192.168.1.64" inputmode="decimal">
@@ -905,7 +905,7 @@ html, body {
       <div class="camcfg-step-n">4</div>
       <div class="camcfg-step-body">
         <div class="camcfg-step-title">Dirección MAC</div>
-        <div class="camcfg-step-desc">Copiá la MAC que muestra el panel de la cámara (Red → Básico)</div>
+        <div class="camcfg-step-desc" id="camMacStepDesc">Copiá la MAC que muestra el panel de la cámara (Red → Básico)</div>
         <div class="copy-row">
           <input id="camMacInput" class="copy-field" type="text" placeholder="Ej. 44:19:B6:XX:XX:XX" autocapitalize="characters" autocomplete="off">
           <button id="camMacSave" class="copy-btn wide">Guardar</button>
@@ -923,7 +923,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.45</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.46</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -1009,7 +1009,7 @@ html, body {
       <div class="sec-title">Datos del dispositivo</div>
       <div class="data-grid" id="dataGrid"></div>
 
-      <button id="camCfgBtn" class="camcfg-btn">🛠 Configurar cámara</button>
+      <button id="camCfgBtn" class="camcfg-btn">🛠 <span id="camCfgBtnTxt">Configurar cámara</span></button>
 
       <!-- Captura de serial -->
       <hr class="perf">
@@ -1847,6 +1847,10 @@ function findHeaderKey(headers, candidates){
 function renderCard(nombre, record, headers, estadoOptions){
   pendingSerialTransfer = null;
   $('cardName').textContent = nombre;
+  // El botón de configuración refleja el tipo de dispositivo apenas se
+  // abre la ficha, no recién al clickearlo (openCamConfig también lo
+  // actualiza, pero eso solo corre DESPUÉS del click).
+  $('camCfgBtnTxt').textContent = isSwitchDevice(nombre) ? 'Configurar switch' : 'Configurar cámara';
 
   // Chips
   const done = dayLog.some(l => l.nombre === nombre);
@@ -1977,6 +1981,18 @@ function getHikPlugin(){
   return null;
 }
 
+// Dispositivos ARMxx son switches TP-Link Omada, no cámaras — usan un
+// portal web totalmente distinto (electron/omadaSwitch.js). Solo
+// disponible en la versión de escritorio por ahora (no hay plugin nativo
+// Android para switches, a diferencia de HikvisionCamera).
+function isSwitchDevice(name){
+  return /ARM/i.test(name || '');
+}
+function getSwitchPlugin(){
+  if (window.ElectronOmadaSwitch) return window.ElectronOmadaSwitch;
+  return null;
+}
+
 $('camCfgBtn').addEventListener('click', openCamConfig);
 $('camCfgClose').addEventListener('click', closeCamConfig);
 $('camCfgModal').addEventListener('click', e => {
@@ -1985,6 +2001,9 @@ $('camCfgModal').addEventListener('click', e => {
 
 function openCamConfig(){
   if (!current){ showToast('Selecciona un dispositivo primero.', 'err'); return; }
+
+  const deviceName = $('cardName').textContent.trim();
+  const isSwitch = isSwitchDevice(deviceName);
 
   const headers = current.headers || [];
   const ipHeader   = findHeaderKey(headers, ['IP','IP ADDRESS']);
@@ -1998,21 +2017,34 @@ function openCamConfig(){
   $('camUser').value = CAM_CREDS.user;
   $('camPass').value = CAM_CREDS.pass;
 
+  // Título del modal, texto del botón y del paso 1 según el tipo de
+  // dispositivo — ARMxx son switches, todo lo demás sigue siendo cámara.
+  $('camCfgTitle').textContent  = isSwitch ? 'Configurar switch' : 'Configurar cámara';
+  $('camCfgBtnTxt').textContent = isSwitch ? 'Configurar switch' : 'Configurar cámara';
+  $('camStep1Title').textContent = isSwitch ? 'Acceder al menú' : 'Acceder al panel de la cámara';
+
   // Siempre arranca en la IP de fábrica: si se recordara la última IP usada
-  // con éxito, un técnico que resetea la cámara entre pruebas terminaría
-  // apuntando a una dirección vieja que ya no responde (pasó en la práctica).
-  $('camAccessIp').value = '192.168.1.64';
+  // con éxito, un técnico que resetea el dispositivo entre pruebas
+  // terminaría apuntando a una dirección vieja que ya no responde (pasó en
+  // la práctica). Cámaras y switches tienen IPs de fábrica distintas.
+  $('camAccessIp').value = isSwitch ? '192.168.0.1' : '192.168.1.64';
 
   current.macHeader = macHeader || null;
   $('camMacInput').value = macHeader ? (current.data[macHeader] || '') : '';
   $('camMacStep').style.display = macHeader ? '' : 'none';
+  $('camMacStepDesc').textContent = isSwitch
+    ? 'Copiá la MAC que muestra System Summary del switch'
+    : 'Copiá la MAC que muestra el panel de la cámara (Red → Básico)';
 
-  // Mostrar el modo automático solo si corremos dentro de la app nativa
-  const hasAuto = !!getHikPlugin();
+  // Mostrar el modo automático solo si corremos dentro de la app nativa Y
+  // hay un plugin disponible para ESTE tipo de dispositivo (Android por
+  // ahora solo tiene el de cámaras — un switch ahí cae directo al modo
+  // manual/copiar-pegar).
+  const hasAuto = isSwitch ? !!getSwitchPlugin() : !!getHikPlugin();
   $('camAutoSection').classList.toggle('hidden', !hasAuto);
   $('camManualWarn').innerHTML = hasAuto
     ? '💡 Podés usar <strong>Configurar automáticamente</strong> arriba, o hacerlo a mano con los pasos de abajo si preferís.'
-    : '⚠ Esto <strong>no</strong> configura la cámara automáticamente. Conectá el teléfono a la red/WiFi de la cámara y usá estos datos en su panel web.';
+    : `⚠ Esto <strong>no</strong> configura el ${isSwitch ? 'switch' : 'la cámara'} automáticamente. Conectá el teléfono a la red/WiFi del dispositivo y usá estos datos en su panel web.`;
   $('camAutoStatus').className = 'camauto-status';
   $('camAutoStatus').textContent = '';
   $('camAutoBtn').disabled = false;
@@ -2031,15 +2063,18 @@ $('camOpenBtn').addEventListener('click', () => {
 });
 
 $('camAutoBtn').addEventListener('click', async () => {
-  const plugin = getHikPlugin();
+  const deviceName = $('cardName').textContent.trim();
+  const isSwitch = isSwitchDevice(deviceName);
+  const plugin = isSwitch ? getSwitchPlugin() : getHikPlugin();
   if (!plugin) return;
+  const kind = isSwitch ? 'switch' : 'cámara';
 
   const accessIp    = $('camAccessIp').value.trim();
   const targetIp    = $('camTargetIp').value.trim();
   const targetMask  = $('camTargetMask').value.trim();
   const targetGw    = $('camTargetGw').value.trim();
 
-  if (!accessIp){ showToast('Escribí la IP de acceso a la cámara.', 'err'); return; }
+  if (!accessIp){ showToast('Escribí la IP de acceso al ' + kind + '.', 'err'); return; }
   if (!targetIp || targetIp === '—' || !targetMask || targetMask === '—'){
     showToast('El Sheet no tiene IP/máscara para este dispositivo.', 'err');
     return;
@@ -2049,7 +2084,7 @@ $('camAutoBtn').addEventListener('click', async () => {
   const status = $('camAutoStatus');
   btn.disabled = true;
   status.className = 'camauto-status busy';
-  status.textContent = 'Conectando con la cámara…';
+  status.textContent = 'Conectando con el ' + kind + '…';
 
   try {
     const secured = await plugin.readAndSecure({
@@ -2057,12 +2092,14 @@ $('camAutoBtn').addEventListener('click', async () => {
       newPass: CAM_CREDS.pass
     });
 
-    status.textContent = (secured.activated ? 'Cámara activada. ' : 'Contraseña actualizada. ')
-      + 'MAC leída: ' + (secured.mac || '—') + ' — poniendo nombre en OSD…';
+    status.textContent = (secured.activated ? 'Contraseña de fábrica cambiada. ' : 'Sesión iniciada. ')
+      + 'MAC leída: ' + (secured.mac || '—') + (isSwitch ? ' — poniendo nombre…' : ' — poniendo nombre en OSD…');
 
     if (secured.mac && current.macHeader) $('camMacInput').value = secured.mac;
-
-    const deviceName = $('cardName').textContent.trim();
+    // Los switches devuelven también el Serial Number leído del panel —
+    // se precarga en el campo de Captura de campo para que quede
+    // guardado junto con la MAC (saveMacToSheet ya manda ambos juntos).
+    if (isSwitch && secured.serial) $('fSerial').value = secured.serial;
 
     const applied = await plugin.applyNetwork({
       accessIp,
@@ -2074,9 +2111,9 @@ $('camAutoBtn').addEventListener('click', async () => {
 
     if (applied.ok){
       status.className = 'camauto-status ok';
-      status.textContent = '✓ Cámara configurada — nueva IP: ' + targetIp
-        + (applied.probablySucceeded ? ' (la cámara cortó la conexión al cambiar, es normal)' : '');
-      showToast('✓ Cámara configurada automáticamente', 'ok');
+      status.textContent = '✓ ' + (isSwitch ? 'Switch configurado' : 'Cámara configurada') + ' — nueva IP: ' + targetIp
+        + (applied.probablySucceeded ? ' (el dispositivo cortó la conexión al cambiar, es normal)' : '');
+      showToast('✓ ' + (isSwitch ? 'Switch' : 'Cámara') + ' configurado automáticamente', 'ok');
       $('credsFloat').classList.remove('hidden');
 
       if (secured.mac && current.macHeader){
@@ -2089,7 +2126,7 @@ $('camAutoBtn').addEventListener('click', async () => {
     }
   } catch(err){
     status.className = 'camauto-status err';
-    status.textContent = '✗ ' + (err.message || err.errorMessage || 'Error al comunicarse con la cámara.');
+    status.textContent = '✗ ' + (err.message || err.errorMessage || ('Error al comunicarse con el ' + kind + '.'));
   } finally {
     btn.disabled = false;
   }

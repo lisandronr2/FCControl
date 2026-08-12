@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const hikvision = require('./hikvisionIsapi');
+const omadaSwitch = require('./omadaSwitch');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
@@ -72,10 +73,10 @@ function beginSilentInstall() {
 // 15s hasta que la sesión termine.
 function tryInstallWhenSafe() {
   if (!updateReady || installingUpdate) return;
-  if (hikvision.hasActiveSession()) {
+  if (hikvision.hasActiveSession() || omadaSwitch.hasActiveSession()) {
     if (!sessionWaitTimer) {
       sessionWaitTimer = setInterval(() => {
-        if (!hikvision.hasActiveSession()) {
+        if (!hikvision.hasActiveSession() && !omadaSwitch.hasActiveSession()) {
           clearInterval(sessionWaitTimer);
           sessionWaitTimer = null;
           beginSilentInstall();
@@ -135,3 +136,7 @@ app.on('window-all-closed', () => {
 // la ventana — así no dependemos de nada que un navegador restrinja.
 ipcMain.handle('hik:readAndSecure', async (_event, opts) => hikvision.readAndSecure(opts));
 ipcMain.handle('hik:applyNetwork', async (_event, opts) => hikvision.applyNetwork(opts));
+
+// IPC: mismo patrón para switches TP-Link Omada (dispositivos ARMxx).
+ipcMain.handle('switch:readAndSecure', async (_event, opts) => omadaSwitch.readAndSecure(opts));
+ipcMain.handle('switch:applyNetwork', async (_event, opts) => omadaSwitch.applyNetwork(opts));
