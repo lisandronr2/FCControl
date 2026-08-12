@@ -259,8 +259,19 @@ async function dumpDiagnostics(win, label) {
     const png = await win.webContents.capturePage();
     fs.writeFileSync(path.join(dir, `switch-${label}-${stamp}.png`), png.toPNG());
 
-    const html = await exec(win, 'document.documentElement.outerHTML').catch(() => '');
-    fs.writeFileSync(path.join(dir, `switch-${label}-${stamp}.html`), html || '');
+    // Bug real confirmado en producción: esto antes solo volcaba
+    // win.webContents (documento de nivel superior) — el contenido de
+    // System Summary/IP Settings/diálogos de confirmación vive dentro del
+    // <iframe name="mainFrame">, así que el HTML de nivel superior nunca
+    // mostraba lo que realmente falló. Ahora se vuelca CADA frame de la
+    // ventana (incluidos los iframes) en un archivo aparte.
+    const frames = allFrames(win);
+    for (let i = 0; i < frames.length; i++) {
+      try {
+        const html = await frames[i].executeJavaScript('document.documentElement.outerHTML');
+        fs.writeFileSync(path.join(dir, `switch-${label}-${stamp}-frame${i}.html`), html || '');
+      } catch (e) { /* frame no accesible, seguir con el resto */ }
+    }
 
     return dir;
   } catch (e) {
@@ -274,8 +285,8 @@ async function dumpDiagnostics(win, label) {
 // que buscarlos igual que en findButtonByTextJs (button/[role=button]/a/
 // input[type=submit|button]), y subir más de un nivel de ancestro porque
 // el contenedor del modal puede estar varios niveles arriba del texto.
-async function confirmDialogIfPresent(win, textHint, timeoutMs = 6000) {
-  const findDialogButtonJs = `
+function findDialogButtonByTextHintJs(textHint) {
+  return `
     (function(){
       const all = Array.from(document.querySelectorAll('*'));
       const textEl = all.find(el => el.children.length === 0 && new RegExp(${JSON.stringify(textHint)}, 'i').test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80);
@@ -296,7 +307,46 @@ async function confirmDialogIfPresent(win, textHint, timeoutMs = 6000) {
       return null;
     })()
   `;
-  return realClick(win, findDialogButtonJs, timeoutMs);
+}
+
+// Respaldo cuando el texto del diálogo no matchea (p.ej. el hint no
+// coincide exactamente con el texto real, o el título vive en un
+// elemento distinto al que se busca): en vez de depender de encontrar
+// primero el TEXTO del diálogo, se busca directamente un botón "OK"
+// visible que tenga un botón "Cancel" cerca (mismo contenedor, hasta 4
+// niveles arriba) — esa combinación es prácticamente exclusiva de un
+// modal de confirmación, así que sirve como detector independiente del
+// wording exacto del título.
+function findVisibleOkNearCancelJs() {
+  return `
+    (function(){
+      const isVisible = el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && el.offsetParent !== null;
+      };
+      const label = b => (b.textContent || b.value || '').trim();
+      const candidates = Array.from(document.querySelectorAll('button, [role=button], a, input[type=submit], input[type=button]'))
+        .filter(isVisible);
+      const okBtn = candidates.find(b => /^ok$/i.test(label(b)));
+      if (!okBtn) return null;
+      let container = okBtn.parentElement;
+      let hops = 0;
+      while (container && hops < 4) {
+        const hasCancel = Array.from(container.querySelectorAll('button, [role=button], a, input[type=submit], input[type=button]'))
+          .some(b => /cancel/i.test(label(b)));
+        if (hasCancel) return okBtn;
+        container = container.parentElement;
+        hops++;
+      }
+      return null;
+    })()
+  `;
+}
+
+async function confirmDialogIfPresent(win, textHint, timeoutMs = 6000) {
+  const byText = await realClick(win, findDialogButtonByTextHintJs(textHint), timeoutMs);
+  if (byText) return true;
+  return realClick(win, findVisibleOkNearCancelJs(), 2000);
 }
 
 async function navigateAndWait(win, accessIp) {

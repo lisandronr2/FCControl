@@ -923,7 +923,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.53</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.54</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -2096,10 +2096,12 @@ $('camAutoBtn').addEventListener('click', async () => {
       + 'MAC leída: ' + (secured.mac || '—') + (isSwitch ? ' — poniendo nombre…' : ' — poniendo nombre en OSD…');
 
     if (secured.mac && current.macHeader) $('camMacInput').value = secured.mac;
-    // Los switches devuelven también el Serial Number leído del panel —
-    // se precarga en el campo de Captura de campo para que quede
-    // guardado junto con la MAC (saveMacToSheet ya manda ambos juntos).
+    // Los switches devuelven también el Serial Number y la MAC leídos del
+    // panel — se precargan en Captura de campo (fSerial/fMac) para que
+    // ambos queden guardados igual que si se hubieran escaneado a mano
+    // (saveMacToSheet ya manda serial + mac juntos en la misma petición).
     if (isSwitch && secured.serial) $('fSerial').value = secured.serial;
+    if (isSwitch && secured.mac) $('fMac').value = secured.mac;
 
     const applied = await plugin.applyNetwork({
       accessIp,
