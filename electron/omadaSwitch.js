@@ -8,7 +8,9 @@
 // similar) en vez de cámaras — index.html decide qué módulo llamar según
 // el nombre del dispositivo.
 
-const { BrowserWindow } = require('electron');
+const { BrowserWindow, app } = require('electron');
+const fs = require('fs');
+const path = require('path');
 
 function setNativeValue(js) {
   // Mismo motivo que en hikvisionIsapi.js: los inputs de un SPA moderno
@@ -156,6 +158,28 @@ async function clickButton(win, text, timeoutMs = 2000) {
   return realClick(win, findButtonByTextJs(text), timeoutMs);
 }
 
+// Ya van dos intentos (btn.click() y click real por coordenadas) sin
+// lograr pasar de la pantalla de login — en vez de seguir adivinando a
+// ciegas una tercera hipótesis, se guarda un screenshot + el HTML visible
+// en el momento exacto del fallo, para diagnosticar con datos reales.
+async function dumpDiagnostics(win, label) {
+  try {
+    const dir = path.join(app.getPath('userData'), 'debug');
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+    const png = await win.webContents.capturePage();
+    fs.writeFileSync(path.join(dir, `switch-${label}-${stamp}.png`), png.toPNG());
+
+    const html = await exec(win, 'document.documentElement.outerHTML').catch(() => '');
+    fs.writeFileSync(path.join(dir, `switch-${label}-${stamp}.html`), html || '');
+
+    return dir;
+  } catch (e) {
+    return null;
+  }
+}
+
 // Diálogos de confirmación tipo "Confirm submission?" (OK/Cancel).
 async function confirmDialogIfPresent(win, textHint, timeoutMs = 6000) {
   const findDialogButtonJs = `
@@ -278,7 +302,8 @@ async function readAndSecure({ accessIp, newPass }) {
 
     const reachedDashboard = await waitFor(win, `document.body.textContent.includes('System Summary')`, 8000, 300);
     if (!reachedDashboard) {
-      throw new Error('No se pudo iniciar sesión en el switch ni con admin/admin ni con la contraseña nueva. Verificá la IP y que el switch esté en estado de fábrica.');
+      const dir = await dumpDiagnostics(win, 'login-stuck');
+      throw new Error(`No se pudo iniciar sesión en el switch ni con admin/admin ni con la contraseña nueva. Verificá la IP y que el switch esté en estado de fábrica.${dir ? ` Diagnóstico guardado en: ${dir}` : ''}`);
     }
 
     const mac = await getFieldByLabel(win, 'MAC Address:');
