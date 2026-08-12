@@ -14,7 +14,9 @@
 // lo sigue haciendo el código original de la cámara, que sabemos que
 // funciona; nosotros solo completamos campos y apretamos botones.
 
-const { BrowserWindow } = require('electron');
+const { BrowserWindow, app } = require('electron');
+const fs = require('fs');
+const path = require('path');
 
 function setNativeValue(js) {
   // Los inputs de Vue/Element UI no detectan cambios hechos con .value = x
@@ -217,7 +219,11 @@ async function advanceWizardToFinish(win, maxSteps = 6) {
       // acepta ese diálogo como parte natural de terminar el asistente,
       // no se espera a que el reinicio termine — la config ya quedó
       // aplicada del lado de la cámara en cuanto se confirma.
-      await confirmRebootDialogIfPresent(win);
+      const rebooted = await confirmRebootDialogIfPresent(win);
+      if (!rebooted) {
+        const dir = await dumpRebootDialogDiagnostics(win);
+        console.warn(`No se pudo confirmar el diálogo de reinicio.${dir ? ` Diagnóstico guardado en: ${dir}` : ''}`);
+      }
       return true;
     }
     return false; // ni "Siguiente" ni un botón de cierre — no hay más por dónde avanzar
@@ -226,80 +232,96 @@ async function advanceWizardToFinish(win, maxSteps = 6) {
 }
 
 // Busca un diálogo de confirmación de reinicio (título/texto con
-// "reiniciar"/"reboot"/"restart") y clickea su botón de aceptar si
-// aparece. Es "best effort": si no hay diálogo (la cámara aplicó el
-// cambio sin pedir confirmación), no hace nada.
+// "reiniciar"/"reboot"/"restart") y CONFIRMA su botón de aceptar con un
+// click de mouse real a nivel de sistema operativo — no un btn.click()
+// de JavaScript.
 //
-// No asume el texto exacto del botón de confirmar (visto "OK" en
-// pantalla, pero no hay garantía de que sea siempre así) — en cambio,
-// ubica el contenedor real del diálogo (subiendo desde el texto
-// "Reiniciar..." hasta el primer ancestro que tenga algún botón
-// adentro, en vez de una cantidad fija de niveles) y clickea el botón
-// que NO diga "Cancel"/"Cancelar" — con dos botones tipo OK/Cancel,
-// alcanza para identificar el de confirmar sin depender de su idioma
-// o wording exacto.
-const REBOOT_DIALOG_FIND_JS = `
-  Array.from(document.querySelectorAll('*'))
-    .some(el => el.children.length === 0 && /reiniciar|reboot|restart/i.test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80)
-`;
-
-const REBOOT_DIALOG_CLICK_JS = `
+// Motivo del cambio (dos intentos anteriores con btn.click() fallaron
+// pese a encontrar y "clickear" el botón sin error): ya se confirmó en
+// esta misma sesión, automatizando Google Sheets, que hay apps web que
+// ignoran clicks/teclas disparados por JS (event.isTrusted === false) —
+// un botón de "reiniciar el dispositivo" es exactamente el tipo de
+// acción sensible que un desarrollador blindaría así a propósito. La
+// única forma de generar un evento genuinamente confiable desde
+// Electron es sendInputEvent, que inyecta el click al nivel del
+// compositor de Chromium como si viniera del sistema operativo. Se
+// ubica el botón por DOM (getBoundingClientRect, buscando en todos los
+// frames por si el asistente vive en un <iframe>) solo para calcular
+// DÓNDE hacer click — el click en sí ya no depende de que btn.click()
+// sea respetado por la página.
+const REBOOT_DIALOG_BUTTON_RECT_JS = `
   (function(){
     const textEl = Array.from(document.querySelectorAll('*'))
       .find(el => el.children.length === 0 && /reiniciar|reboot|restart/i.test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80);
-    if (!textEl) return false;
+    if (!textEl) return null;
 
     let container = textEl.parentElement;
     while (container && container !== document.body && !container.querySelector('button, .el-button, [role=button]')) {
       container = container.parentElement;
     }
-    if (!container) return false;
+    if (!container) return null;
 
     const buttons = Array.from(container.querySelectorAll('button, .el-button, [role=button]'))
       .filter(b => (b.textContent || '').trim().length > 0);
-    if (!buttons.length) return false;
+    if (!buttons.length) return null;
 
     const btn = buttons.find(b => !/cancel/i.test((b.textContent || '').trim())) || buttons[0];
-    btn.click();
-    return true;
+    const r = btn.getBoundingClientRect();
+    if (!r || r.width === 0 || r.height === 0) return null;
+    return JSON.stringify({ x: r.x, y: r.y, width: r.width, height: r.height });
   })()
 `;
 
-async function confirmRebootDialogIfPresent(win, timeoutMs = 6000) {
-  // Busca en TODOS los frames (ver execAllFrames) por si el asistente
-  // vive en un <iframe> propio — una consulta solo al documento
-  // principal nunca lo encontraría en ese caso, sin importar qué tan
-  // bien matchee el texto o el botón.
-  const start = Date.now();
-  let found = false;
-  while (Date.now() - start < timeoutMs) {
-    found = await execAllFrames(win, REBOOT_DIALOG_FIND_JS);
-    if (found) break;
-    await new Promise(r => setTimeout(r, 250));
-  }
-
-  let clicked = false;
-  if (found) {
-    clicked = await execAllFrames(win, REBOOT_DIALOG_CLICK_JS);
-    if (clicked) await new Promise(r => setTimeout(r, 800));
-  }
-
-  // Respaldo si el click por DOM no confirmó nada (diálogo detectado
-  // pero, por lo que sea, no se pudo clickear el botón desde ningún
-  // frame): un Enter real a nivel de sistema operativo, que en este tipo
-  // de diálogo de confirmación suele estar atado al botón por defecto
-  // (el de confirmar), sin depender en absoluto de encontrar el elemento
-  // en el DOM.
-  if (found && !clicked) {
+async function findRebootButtonRect(win) {
+  for (const frame of allFrames(win)) {
     try {
-      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
-      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
-      await new Promise(r => setTimeout(r, 800));
-      clicked = true;
-    } catch (e) { /* si sendInputEvent no está disponible, se deja como no confirmado */ }
+      const json = await frame.executeJavaScript(REBOOT_DIALOG_BUTTON_RECT_JS);
+      if (json) return JSON.parse(json);
+    } catch (e) { /* frame cross-origin o destruido — se prueba el siguiente */ }
   }
+  return null;
+}
 
-  return clicked;
+async function confirmRebootDialogIfPresent(win, timeoutMs = 8000) {
+  const start = Date.now();
+  let rect = null;
+  while (Date.now() - start < timeoutMs) {
+    rect = await findRebootButtonRect(win);
+    if (rect) break;
+    await new Promise(r => setTimeout(r, 300));
+  }
+  if (!rect) return false;
+
+  const clickX = Math.round(rect.x + rect.width / 2);
+  const clickY = Math.round(rect.y + rect.height / 2);
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: clickX, y: clickY });
+  win.webContents.sendInputEvent({ type: 'mouseDown', x: clickX, y: clickY, button: 'left', clickCount: 1 });
+  await new Promise(r => setTimeout(r, 60));
+  win.webContents.sendInputEvent({ type: 'mouseUp', x: clickX, y: clickY, button: 'left', clickCount: 1 });
+  await new Promise(r => setTimeout(r, 1000));
+  return true;
+}
+
+// Si el click real por coordenadas TAMPOCO logra confirmar el reinicio,
+// ya no tiene sentido seguir adivinando a ciegas otra hipótesis más —
+// se guarda una captura de pantalla + el HTML visible en ese momento
+// exacto, para diagnosticar con datos reales en vez de otra suposición.
+async function dumpRebootDialogDiagnostics(win) {
+  try {
+    const dir = path.join(app.getPath('userData'), 'debug');
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+    const png = await win.webContents.capturePage();
+    fs.writeFileSync(path.join(dir, `reboot-dialog-${stamp}.png`), png.toPNG());
+
+    const html = await execAllFrames(win, 'document.documentElement.outerHTML').catch(() => '');
+    fs.writeFileSync(path.join(dir, `reboot-dialog-${stamp}.html`), html || '');
+
+    return dir;
+  } catch (e) {
+    return null;
+  }
 }
 
 // Busca y clickea un elemento de menú/pestaña por su texto visible exacto
