@@ -400,9 +400,15 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
     win.destroy();
     return { ok: true, probablySucceeded: true };
   } catch (e) {
+    // Mismo mecanismo que en readAndSecure: si algo de este paso falla,
+    // se guarda un screenshot + el HTML visible en ese momento exacto —
+    // con eso se puede corregir el selector que corresponda de una,
+    // en vez de otra ronda de captura manual + suposición.
+    const dir = await dumpDiagnostics(win, 'apply-network-failed').catch(() => null);
     sessions.delete(accessIp);
     try { win.destroy(); } catch (_) {}
-    return { ok: false, message: e.message || String(e) };
+    const msg = e.message || String(e);
+    return { ok: false, message: dir ? `${msg} Diagnóstico guardado en: ${dir}` : msg };
   }
 }
 
