@@ -61,10 +61,18 @@ function findInputByLabelJs(labelText) {
   // derecha" sin agrupación semántica clara (no hay <label for=...>) — se
   // busca el texto de la etiqueta y se toma el input/select más cercano
   // en la misma fila.
+  // Confirmado con captura de diagnóstico real: la etiqueta en el DOM es
+  // "Device Name" SIN los dos puntos — el ":" se agrega visualmente por
+  // CSS (patrón típico de esta UI clásica basada en tablas), no es texto
+  // real. Comparar con el ":" incluido nunca iba a matchear nada. Se
+  // normalizan los dos puntos finales de AMBOS lados antes de comparar,
+  // así funciona sin importar si el firmware los pone en el DOM o no.
+  const norm = s => (s || '').trim().replace(/:\s*$/, '');
   return `
     (function(){
+      const target = ${JSON.stringify(norm(labelText))};
       const all = Array.from(document.querySelectorAll('*'));
-      const lbl = all.find(el => el.children.length === 0 && (el.textContent || '').trim() === ${JSON.stringify(labelText)});
+      const lbl = all.find(el => el.children.length === 0 && (el.textContent || '').trim().replace(/:\\s*$/, '') === target);
       if (!lbl) return null;
       let row = lbl;
       for (let i = 0; i < 5 && row; i++) {
