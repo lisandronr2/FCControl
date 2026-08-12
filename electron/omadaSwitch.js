@@ -31,16 +31,6 @@ async function exec(win, script) {
   return win.webContents.executeJavaScript(script);
 }
 
-async function waitFor(win, conditionJs, timeoutMs = 10000, intervalMs = 300) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const ok = await exec(win, conditionJs);
-    if (ok) return true;
-    await new Promise(r => setTimeout(r, intervalMs));
-  }
-  return false;
-}
-
 // Busca en TODOS los frames de la ventana, no solo el documento
 // principal — lección aprendida automatizando el asistente de red de las
 // cámaras Hikvision: un diálogo de confirmación puede vivir en un
@@ -54,6 +44,33 @@ function allFrames(win) {
   } catch (e) {
     return [];
   }
+}
+
+// Confirmado con captura de diagnóstico real: el panel de este switch NO
+// es una sola página — es un documento contenedor con el menú lateral en
+// el nivel superior y el contenido de cada sección (System Summary, IP
+// Settings, ...) cargado dentro de un <iframe name="mainFrame">. Ejecutar
+// JS solo en win.webContents (nivel superior) nunca ve esos campos una
+// vez que el menú navegó a una sección — hay que probar en todos los
+// frames y quedarse con el primero que dé un resultado útil.
+async function execAnyFrame(win, script, isSuccess = r => !!r) {
+  for (const frame of allFrames(win)) {
+    try {
+      const result = await frame.executeJavaScript(script);
+      if (isSuccess(result)) return result;
+    } catch (e) { /* siguiente frame */ }
+  }
+  return null;
+}
+
+async function waitFor(win, conditionJs, timeoutMs = 10000, intervalMs = 300) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const ok = await execAnyFrame(win, conditionJs);
+    if (ok) return true;
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  return false;
 }
 
 function findInputByLabelJs(labelText) {
@@ -86,7 +103,7 @@ function findInputByLabelJs(labelText) {
 }
 
 async function setFieldByLabel(win, labelText, value) {
-  return exec(win, `
+  return execAnyFrame(win, `
     (function(){
       const field = ${findInputByLabelJs(labelText)};
       if (!field) return false;
@@ -100,16 +117,16 @@ async function setFieldByLabel(win, labelText, value) {
       ${setNativeValue(`field, ${JSON.stringify(value)}`)};
       return true;
     })()
-  `);
+  `, r => r === true);
 }
 
 async function getFieldByLabel(win, labelText) {
-  return exec(win, `
+  return execAnyFrame(win, `
     (function(){
       const field = ${findInputByLabelJs(labelText)};
       return field ? (field.value || '').trim() : null;
     })()
-  `);
+  `, r => r !== null && r !== undefined);
 }
 
 // Causa raíz real del login trabado, confirmada con captura de
@@ -122,10 +139,15 @@ async function getFieldByLabel(win, labelText) {
 // textContent) como <input type=submit|button> (por su atributo value,
 // ya que estos elementos no tienen textContent).
 function findButtonByTextJs(text) {
+  // Confirmado con captura de diagnóstico real: el menú lateral de este
+  // switch ("IP Settings", "System Summary", etc.) son <a> sin href (la
+  // navegación la maneja JS propio del panel vía un atributo "url"
+  // custom, no un click nativo de enlace) — hay que incluirlos en la
+  // búsqueda, si no el buscador de botones nunca los encuentra.
   return `
     (function(){
       const t = ${JSON.stringify(text)};
-      const byText = Array.from(document.querySelectorAll('button, [role=button]'))
+      const byText = Array.from(document.querySelectorAll('button, [role=button], a'))
         .find(b => b.textContent.trim() === t || b.textContent.trim().includes(t));
       if (byText) return byText;
       return Array.from(document.querySelectorAll('input[type=submit], input[type=button]'))
@@ -153,29 +175,60 @@ async function realClick(win, findElJs, timeoutMs = 6000) {
       return JSON.stringify({ x: r.x, y: r.y, width: r.width, height: r.height });
     })()
   `;
+  const clickJs = `
+    (function(){
+      const el = ${findElJs};
+      if (!el) return false;
+      if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center' });
+      el.click();
+      return true;
+    })()
+  `;
 
   const start = Date.now();
-  let rect = null;
   while (Date.now() - start < timeoutMs) {
     for (const frame of allFrames(win)) {
+      const isTopFrame = frame === win.webContents.mainFrame;
       try {
-        const json = await frame.executeJavaScript(findRectJs);
-        if (json) { rect = JSON.parse(json); break; }
+        if (isTopFrame) {
+          // getBoundingClientRect() da coordenadas relativas a la ventana
+          // solo para el frame de nivel superior — ahí sí sirve el click
+          // real por mouse (sendInputEvent), que es indistinguible de un
+          // click de sistema operativo.
+          const json = await frame.executeJavaScript(findRectJs);
+          if (json) {
+            const rect = JSON.parse(json);
+            const clickX = Math.round(rect.x + rect.width / 2);
+            const clickY = Math.round(rect.y + rect.height / 2);
+            win.webContents.sendInputEvent({ type: 'mouseMove', x: clickX, y: clickY });
+            win.webContents.sendInputEvent({ type: 'mouseDown', x: clickX, y: clickY, button: 'left', clickCount: 1 });
+            await new Promise(r => setTimeout(r, 60));
+            win.webContents.sendInputEvent({ type: 'mouseUp', x: clickX, y: clickY, button: 'left', clickCount: 1 });
+            await new Promise(r => setTimeout(r, 400));
+            return true;
+          }
+        } else {
+          // Elemento dentro de un <iframe> anidado (p.ej. "mainFrame" de
+          // este switch, donde vive el contenido de cada sección del
+          // menú): su getBoundingClientRect() es relativo AL PROPIO
+          // iframe, no a la ventana, así que sendInputEvent con esas
+          // coordenadas apuntaría al lugar equivocado. Traducir el rect
+          // sumando el offset del <iframe> en cada frame padre es
+          // innecesario acá: el bug del botón Login nunca fue por clicks
+          // no confiables (isTrusted) — fue un selector mal armado (ver
+          // findButtonByTextJs) — así que un click de DOM normal dentro
+          // del frame donde vive el elemento alcanza.
+          const clicked = await frame.executeJavaScript(clickJs);
+          if (clicked) {
+            await new Promise(r => setTimeout(r, 400));
+            return true;
+          }
+        }
       } catch (e) { /* siguiente frame */ }
     }
-    if (rect) break;
     await new Promise(r => setTimeout(r, 300));
   }
-  if (!rect) return false;
-
-  const clickX = Math.round(rect.x + rect.width / 2);
-  const clickY = Math.round(rect.y + rect.height / 2);
-  win.webContents.sendInputEvent({ type: 'mouseMove', x: clickX, y: clickY });
-  win.webContents.sendInputEvent({ type: 'mouseDown', x: clickX, y: clickY, button: 'left', clickCount: 1 });
-  await new Promise(r => setTimeout(r, 60));
-  win.webContents.sendInputEvent({ type: 'mouseUp', x: clickX, y: clickY, button: 'left', clickCount: 1 });
-  await new Promise(r => setTimeout(r, 400));
-  return true;
+  return false;
 }
 
 async function clickButton(win, text, timeoutMs = 2000) {
