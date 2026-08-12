@@ -104,20 +104,36 @@ async function getFieldByLabel(win, labelText) {
   `);
 }
 
+// Causa raíz real del login trabado, confirmada con captura de
+// diagnóstico: el botón "Login" de esta pantalla NO es un <button> —
+// es <input type="submit" value="Login" onclick="return doOnclick();">
+// (una página clásica de formulario, ni siquiera React). Buscar solo
+// 'button' nunca lo iba a encontrar, sin importar si el click era
+// sintético o real — el problema nunca fue "isTrusted", fue el
+// selector. Ahora matchea tanto <button>/[role=button] (por
+// textContent) como <input type=submit|button> (por su atributo value,
+// ya que estos elementos no tienen textContent).
 function findButtonByTextJs(text) {
-  return `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === ${JSON.stringify(text)} || b.textContent.trim().includes(${JSON.stringify(text)}))`;
+  return `
+    (function(){
+      const t = ${JSON.stringify(text)};
+      const byText = Array.from(document.querySelectorAll('button, [role=button]'))
+        .find(b => b.textContent.trim() === t || b.textContent.trim().includes(t));
+      if (byText) return byText;
+      return Array.from(document.querySelectorAll('input[type=submit], input[type=button]'))
+        .find(i => (i.value || '').trim() === t || (i.value || '').trim().includes(t));
+    })()
+  `;
 }
 
-// TODO CLICK EN ESTE MÓDULO PASA POR ACÁ — nunca btn.click() de JS.
-// Confirmado en producción (captura real: usuario/contraseña quedaban
-// bien escritos en la pantalla de login, pero el click en "Login" no
-// hacía nada — se quedaba trabado ahí para siempre): esta app de Omada
-// ignora clicks disparados por JavaScript (event.isTrusted === false).
-// Se ubica el elemento por DOM (buscando en todos los frames, por si
-// vive en un <iframe>) solo para calcular SUS COORDENADAS, y el click en
-// sí se hace con sendInputEvent — indistinguible de un click real de
-// mouse del sistema operativo. Misma lección aprendida con el diálogo de
-// reinicio del asistente de red de las cámaras Hikvision.
+// TODO CLICK EN ESTE MÓDULO PASA POR ACÁ — nunca btn.click() de JS. Se
+// ubica el elemento por DOM (buscando en todos los frames, por si vive
+// en un <iframe>) solo para calcular SUS COORDENADAS, y el click en sí
+// se hace con sendInputEvent — indistinguible de un click real de mouse
+// del sistema operativo. No era la causa del login trabado (ver
+// findButtonByTextJs más arriba), pero se mantiene como mecanismo de
+// click porque sí hace falta para el diálogo de confirmación tipo
+// "Confirm submission?" de la pantalla de IP Settings de este switch.
 async function realClick(win, findElJs, timeoutMs = 6000) {
   const findRectJs = `
     (function(){
