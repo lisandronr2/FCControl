@@ -76,6 +76,17 @@ function allElementsJs() {
   return `(${COLLECT_DOCS_JS}).flatMap(d => { try { return Array.from(d.querySelectorAll('*')); } catch(e) { return []; } })`;
 }
 
+// Selector de "cualquier cosa clickeable" usado en todo el módulo.
+// Confirmado con captura de diagnóstico real: el botón OK del diálogo
+// "Confirm submission?" NO es <button>/<a>/<input> — es
+// <div class="alert_btn close" id="alert_ok">OK</div>, un <div> normal
+// con su propio manejador de click. Ya habíamos aprendido esta lección
+// con "Login" (era <input type=submit>) y el menú lateral (eran <a>) —
+// este panel simplemente no usa elementos semánticos de botón en ningún
+// lado. [class*="btn"] cubre este patrón (clases como "alert_btn"), y
+// [onclick] es un respaldo genérico para cualquier otro caso similar.
+const CLICKABLE_SELECTOR = 'button, [role=button], a, input[type=submit], input[type=button], [class*="btn"], [onclick]';
+
 function containsTextAnyDocJs(text) {
   return `(${COLLECT_DOCS_JS}).some(d => d.body && d.body.textContent.includes(${JSON.stringify(text)}))`;
 }
@@ -175,8 +186,8 @@ function findButtonByTextJs(text) {
     (function(){
       const t = ${JSON.stringify(text)};
       const all = ${allElementsJs()};
-      const byText = all.filter(b => b.matches && b.matches('button, [role=button], a'))
-        .find(b => b.textContent.trim() === t || b.textContent.trim().includes(t));
+      const byText = all.filter(b => b.matches && b.matches(${JSON.stringify(CLICKABLE_SELECTOR)}))
+        .find(b => (b.textContent || '').trim() === t || (b.textContent || '').trim().includes(t));
       if (byText) return byText;
       return all.filter(b => b.matches && b.matches('input[type=submit], input[type=button]'))
         .find(i => (i.value || '').trim() === t || (i.value || '').trim().includes(t));
@@ -268,7 +279,7 @@ function findDialogButtonByTextHintJs(textHint) {
       let container = textEl.parentElement;
       let hops = 0;
       while (container && hops < 8) {
-        const candidates = Array.from(container.querySelectorAll('button, [role=button], a, input[type=submit], input[type=button]'))
+        const candidates = Array.from(container.querySelectorAll(${JSON.stringify(CLICKABLE_SELECTOR)}))
           .filter(b => (b.textContent || b.value || '').trim().length > 0 && isVisible(b));
         if (candidates.length) {
           const ok = candidates.find(b => /^ok$/i.test((b.textContent || b.value || '').trim()))
@@ -314,13 +325,13 @@ function findVisibleOkNearCancelJs() {
       };
       const label = b => (b.textContent || b.value || '').trim();
       const all = ${allElementsJs()};
-      const candidates = all.filter(b => b.matches && b.matches('button, [role=button], a, input[type=submit], input[type=button]') && isVisible(b));
+      const candidates = all.filter(b => b.matches && b.matches(${JSON.stringify(CLICKABLE_SELECTOR)}) && isVisible(b));
       const okBtn = candidates.find(b => /^ok$/i.test(label(b)));
       if (!okBtn) return null;
       let container = okBtn.parentElement;
       let hops = 0;
       while (container && hops < 4) {
-        const hasCancel = Array.from(container.querySelectorAll('button, [role=button], a, input[type=submit], input[type=button]'))
+        const hasCancel = Array.from(container.querySelectorAll(${JSON.stringify(CLICKABLE_SELECTOR)}))
           .some(b => /cancel/i.test(label(b)));
         if (hasCancel) return okBtn;
         container = container.parentElement;
@@ -372,7 +383,7 @@ function findStandaloneOkJs() {
       const isVisible = ${isVisibleJs('el')};
       const label = b => (b.textContent || b.value || '').trim();
       const all = ${allElementsJs()};
-      const candidates = all.filter(b => b.matches && b.matches('button, [role=button], a, input[type=submit], input[type=button]') && isVisible(b));
+      const candidates = all.filter(b => b.matches && b.matches(${JSON.stringify(CLICKABLE_SELECTOR)}) && isVisible(b));
       return candidates.find(b => /^ok$/i.test(label(b))) || null;
     })()
   `;
