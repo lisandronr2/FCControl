@@ -357,6 +357,37 @@ async function confirmDialogIfPresent(win, textHint, timeoutMs = 6000) {
   return false;
 }
 
+// Confirmado con captura real: después de "Confirm submission?" aparece
+// TODAVÍA otro diálogo, "Save Configuration Success." — solo con botón
+// OK (sin Cancel), así que findVisibleOkNearCancelJs no lo detecta. En
+// vez de agregar un textHint específico más (frágil ante cualquier otro
+// wording de "éxito" que use el firmware), se busca genéricamente
+// cualquier botón "OK" visible que sea el único control de su fila/caja
+// (sin Cancel al lado) — un patrón que identifica un diálogo de aviso
+// simple igual de bien que uno de confirmación. Se repite varias veces
+// por si hay más de un diálogo encadenado.
+function findStandaloneOkJs() {
+  return `
+    (function(){
+      const isVisible = ${isVisibleJs('el')};
+      const label = b => (b.textContent || b.value || '').trim();
+      const all = ${allElementsJs()};
+      const candidates = all.filter(b => b.matches && b.matches('button, [role=button], a, input[type=submit], input[type=button]') && isVisible(b));
+      return candidates.find(b => /^ok$/i.test(label(b))) || null;
+    })()
+  `;
+}
+
+async function dismissFollowUpOkDialogs(win, maxDialogs = 3) {
+  for (let i = 0; i < maxDialogs; i++) {
+    const before = await exec(win, `!!(${findStandaloneOkJs()})`).catch(() => false);
+    if (!before) return;
+    const clicked = await realClick(win, findStandaloneOkJs(), 1500);
+    if (!clicked) return;
+    await new Promise(r => setTimeout(r, 600));
+  }
+}
+
 async function navigateAndWait(win, accessIp) {
   await win.loadURL(`http://${accessIp}/`);
   const loaded = await waitFor(win, `document.querySelector('input') != null || document.body.textContent.length > 40`, 12000, 300);
@@ -492,6 +523,7 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
         throw new Error('No se encontró el botón "Apply" en System Summary.');
       }
       await confirmDialogIfPresent(win, 'confirm', 3000);
+      await dismissFollowUpOkDialogs(win);
       await new Promise(r => setTimeout(r, 1000));
     }
 
@@ -534,6 +566,11 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
         // que se trata como error duro (antes se ignoraba en silencio).
         throw new Error('No se pudo confirmar el diálogo "Confirm submission?" en IP Settings — el switch no se reinició con los datos nuevos.');
       }
+      // Confirmado con captura real: después de "Confirm submission?"
+      // aparece todavía otro diálogo, "Save Configuration Success." —
+      // solo con OK, sin Cancel — que también hay que cerrar para que el
+      // switch termine de aplicar y reiniciarse.
+      await dismissFollowUpOkDialogs(win);
       await new Promise(r => setTimeout(r, 1500));
     }
 
