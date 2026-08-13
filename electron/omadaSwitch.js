@@ -245,17 +245,31 @@ async function dumpDiagnostics(win, label) {
 // que buscarlos igual que en findButtonByTextJs (button/[role=button]/a/
 // input[type=submit|button]), y subir más de un nivel de ancestro porque
 // el contenedor del modal puede estar varios niveles arriba del texto.
+//
+// Bug real confirmado en producción: esta búsqueda no exigía que el
+// texto "confirm" encontrado estuviera VISIBLE — clasificadores como
+// este panel suelen tener plantillas ocultas (display:none) o copias
+// del modal en el DOM que se clonan/muestran recién al abrirlo. Sin el
+// filtro de visibilidad, el código podía matchear una de esas copias
+// ocultas y clickear un botón "OK" decorativo sin ningún efecto real:
+// la app reportaba éxito pero el switch no cambiaba nada. Ahora se exige
+// que tanto el texto como el botón candidato estén realmente visibles.
+function isVisibleJs(varName) {
+  return `(function(el){ if(!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && el.offsetParent !== null; })(${varName})`;
+}
+
 function findDialogButtonByTextHintJs(textHint) {
   return `
     (function(){
+      const isVisible = ${isVisibleJs('el')};
       const all = ${allElementsJs()};
-      const textEl = all.find(el => el.children.length === 0 && new RegExp(${JSON.stringify(textHint)}, 'i').test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80);
+      const textEl = all.find(el => el.children.length === 0 && new RegExp(${JSON.stringify(textHint)}, 'i').test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80 && isVisible(el));
       if (!textEl) return null;
       let container = textEl.parentElement;
       let hops = 0;
       while (container && hops < 8) {
         const candidates = Array.from(container.querySelectorAll('button, [role=button], a, input[type=submit], input[type=button]'))
-          .filter(b => (b.textContent || b.value || '').trim().length > 0);
+          .filter(b => (b.textContent || b.value || '').trim().length > 0 && isVisible(b));
         if (candidates.length) {
           const ok = candidates.find(b => /^ok$/i.test((b.textContent || b.value || '').trim()))
             || candidates.find(b => !/cancel/i.test((b.textContent || b.value || '').trim()));
@@ -265,6 +279,20 @@ function findDialogButtonByTextHintJs(textHint) {
         hops++;
       }
       return null;
+    })()
+  `;
+}
+
+// Comprueba si sigue habiendo, en cualquier documento accesible, un
+// texto visible que matchee el hint del diálogo — usado para verificar
+// que un click realmente lo cerró, en vez de asumir éxito solo porque se
+// encontró y clickeó *algún* elemento.
+function dialogTextStillVisibleJs(textHint) {
+  return `
+    (function(){
+      const isVisible = ${isVisibleJs('el')};
+      const all = ${allElementsJs()};
+      return !!all.find(el => el.children.length === 0 && new RegExp(${JSON.stringify(textHint)}, 'i').test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80 && isVisible(el));
     })()
   `;
 }
@@ -303,10 +331,30 @@ function findVisibleOkNearCancelJs() {
   `;
 }
 
+// Antes se asumía éxito apenas se encontraba y clickeaba *algún*
+// elemento — eso permitía falsos positivos (click en un botón "OK"
+// decorativo de una plantilla oculta, sin ningún efecto real en el
+// switch: la app reportaba éxito pero el dispositivo no cambiaba nada).
+// Ahora, después de cada click, se verifica que el texto del diálogo
+// realmente haya desaparecido de la pantalla antes de dar por
+// confirmado — si sigue visible, se reintenta hasta agotar timeoutMs.
 async function confirmDialogIfPresent(win, textHint, timeoutMs = 6000) {
-  const byText = await realClick(win, findDialogButtonByTextHintJs(textHint), timeoutMs);
-  if (byText) return true;
-  return realClick(win, findVisibleOkNearCancelJs(), 2000);
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const remaining = Math.max(1000, timeoutMs - (Date.now() - start));
+    const clicked = await realClick(win, findDialogButtonByTextHintJs(textHint), Math.min(1500, remaining))
+      || await realClick(win, findVisibleOkNearCancelJs(), Math.min(1500, remaining));
+    if (!clicked) {
+      await new Promise(r => setTimeout(r, 300));
+      continue;
+    }
+    await new Promise(r => setTimeout(r, 500));
+    const stillThere = await exec(win, dialogTextStillVisibleJs(textHint)).catch(() => true);
+    if (!stillThere) return true;
+    // El click no tuvo efecto real — reintentar la búsqueda desde cero
+    // (puede que haya matcheado el elemento equivocado la primera vez).
+  }
+  return false;
 }
 
 async function navigateAndWait(win, accessIp) {
