@@ -31,42 +31,59 @@ async function exec(win, script) {
   return win.webContents.executeJavaScript(script);
 }
 
-// Busca en TODOS los frames de la ventana, no solo el documento
-// principal — lección aprendida automatizando el asistente de red de las
-// cámaras Hikvision: un diálogo de confirmación puede vivir en un
-// <iframe> propio, y executeJavaScript normal solo corre en el frame de
-// nivel superior.
-function allFrames(win) {
-  try {
-    const main = win.webContents.mainFrame;
-    const subtree = main.framesInSubtree || [main];
-    return subtree.length ? subtree : [main];
-  } catch (e) {
-    return [];
-  }
+// Historia de este helper (para no repetir el mismo error): la primera
+// versión buscaba en "todos los frames de la ventana" usando la API de
+// Electron win.webContents.mainFrame.framesInSubtree, ejecutando JS por
+// separado en cada WebFrameMain. Confirmado con captura de diagnóstico
+// real que esa API solo devolvía 2 frames en este switch (el documento
+// contenedor + un iframe vacío) y NUNCA llegaba al <iframe name="mainFrame">
+// real donde vive todo el contenido (System Summary, IP Settings, el
+// diálogo "Confirm submission?") — aun cuando ese iframe se ve
+// perfectamente en los screenshots. Los <iframe src=""> de este panel
+// clásico se llenan por JS (probablemente document.write dentro del
+// propio contentDocument), y framesInSubtree no los reflejaba bien.
+//
+// Reemplazado por acceso directo a contentDocument: todo corre en UNA
+// sola llamada a win.webContents.executeJavaScript (siempre el frame de
+// nivel superior), que recorre document + todos los <iframe>/<frame>
+// mismo-origen vía su .contentDocument — esto es JS estándar del DOM, no
+// depende de ninguna API de Electron, y punto clave: como la referencia
+// al elemento encontrado sigue siendo un nodo del DOM real (aunque viva
+// en un iframe anidado), se le puede llamar .click() directo y el evento
+// se dispara correctamente DENTRO de su propio documento — sin necesidad
+// de traducir coordenadas ni de decidir si el click debe ser "real" por
+// mouse o no.
+const COLLECT_DOCS_JS = `
+  (function collectDocs(){
+    const docs = [document];
+    const seen = new Set([document]);
+    const stack = [document];
+    while (stack.length) {
+      const doc = stack.pop();
+      let frames = [];
+      try { frames = Array.from(doc.querySelectorAll('iframe, frame')); } catch (e) {}
+      for (const f of frames) {
+        let d = null;
+        try { d = f.contentDocument; } catch (e) { /* cross-origin, sin acceso */ }
+        if (d && !seen.has(d)) { seen.add(d); docs.push(d); stack.push(d); }
+      }
+    }
+    return docs;
+  })()
+`;
+
+function allElementsJs() {
+  return `(${COLLECT_DOCS_JS}).flatMap(d => { try { return Array.from(d.querySelectorAll('*')); } catch(e) { return []; } })`;
 }
 
-// Confirmado con captura de diagnóstico real: el panel de este switch NO
-// es una sola página — es un documento contenedor con el menú lateral en
-// el nivel superior y el contenido de cada sección (System Summary, IP
-// Settings, ...) cargado dentro de un <iframe name="mainFrame">. Ejecutar
-// JS solo en win.webContents (nivel superior) nunca ve esos campos una
-// vez que el menú navegó a una sección — hay que probar en todos los
-// frames y quedarse con el primero que dé un resultado útil.
-async function execAnyFrame(win, script, isSuccess = r => !!r) {
-  for (const frame of allFrames(win)) {
-    try {
-      const result = await frame.executeJavaScript(script);
-      if (isSuccess(result)) return result;
-    } catch (e) { /* siguiente frame */ }
-  }
-  return null;
+function containsTextAnyDocJs(text) {
+  return `(${COLLECT_DOCS_JS}).some(d => d.body && d.body.textContent.includes(${JSON.stringify(text)}))`;
 }
 
 async function waitFor(win, conditionJs, timeoutMs = 10000, intervalMs = 300) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const ok = await execAnyFrame(win, conditionJs);
+    const ok = await exec(win, conditionJs).catch(() => false);
     if (ok) return true;
     await new Promise(r => setTimeout(r, intervalMs));
   }
@@ -94,12 +111,12 @@ function findLabelValueCellJs(labelText) {
   return `
     (function(){
       const target = ${JSON.stringify(norm(labelText))};
-      const all = Array.from(document.querySelectorAll('*'));
+      const all = ${allElementsJs()};
       const lbl = all.find(el => el.children.length === 0 && (el.textContent || '').trim().replace(/:\\s*$/, '') === target);
       if (!lbl) return null;
       let cell = lbl;
       let hops = 0;
-      while (cell && !cell.nextElementSibling && cell.parentElement && cell.parentElement !== document.body && hops < 5) {
+      while (cell && !cell.nextElementSibling && cell.parentElement && hops < 5) {
         cell = cell.parentElement;
         hops++;
       }
@@ -109,7 +126,7 @@ function findLabelValueCellJs(labelText) {
 }
 
 async function setFieldByLabel(win, labelText, value) {
-  return execAnyFrame(win, `
+  return exec(win, `
     (function(){
       const cell = ${findLabelValueCellJs(labelText)};
       if (!cell) return false;
@@ -125,11 +142,11 @@ async function setFieldByLabel(win, labelText, value) {
       ${setNativeValue(`field, ${JSON.stringify(value)}`)};
       return true;
     })()
-  `, r => r === true);
+  `).catch(() => false);
 }
 
 async function getFieldByLabel(win, labelText) {
-  return execAnyFrame(win, `
+  return exec(win, `
     (function(){
       const cell = ${findLabelValueCellJs(labelText)};
       if (!cell) return null;
@@ -137,7 +154,7 @@ async function getFieldByLabel(win, labelText) {
       if (field) return (field.value || '').trim();
       return (cell.textContent || '').trim();
     })()
-  `, r => r !== null && r !== undefined);
+  `).catch(() => null);
 }
 
 // Causa raíz real del login trabado, confirmada con captura de
@@ -148,44 +165,31 @@ async function getFieldByLabel(win, labelText) {
 // sintético o real — el problema nunca fue "isTrusted", fue el
 // selector. Ahora matchea tanto <button>/[role=button] (por
 // textContent) como <input type=submit|button> (por su atributo value,
-// ya que estos elementos no tienen textContent).
+// ya que estos elementos no tienen textContent), buscando en TODOS los
+// documentos accesibles (ver COLLECT_DOCS_JS) — el menú lateral
+// ("IP Settings", "System Summary", etc.) son <a> sin href en el
+// documento de nivel superior, pero botones como "Apply"/"Login" viven
+// dentro del <iframe name="mainFrame">.
 function findButtonByTextJs(text) {
-  // Confirmado con captura de diagnóstico real: el menú lateral de este
-  // switch ("IP Settings", "System Summary", etc.) son <a> sin href (la
-  // navegación la maneja JS propio del panel vía un atributo "url"
-  // custom, no un click nativo de enlace) — hay que incluirlos en la
-  // búsqueda, si no el buscador de botones nunca los encuentra.
   return `
     (function(){
       const t = ${JSON.stringify(text)};
-      const byText = Array.from(document.querySelectorAll('button, [role=button], a'))
+      const all = ${allElementsJs()};
+      const byText = all.filter(b => b.matches && b.matches('button, [role=button], a'))
         .find(b => b.textContent.trim() === t || b.textContent.trim().includes(t));
       if (byText) return byText;
-      return Array.from(document.querySelectorAll('input[type=submit], input[type=button]'))
+      return all.filter(b => b.matches && b.matches('input[type=submit], input[type=button]'))
         .find(i => (i.value || '').trim() === t || (i.value || '').trim().includes(t));
     })()
   `;
 }
 
-// TODO CLICK EN ESTE MÓDULO PASA POR ACÁ — nunca btn.click() de JS. Se
-// ubica el elemento por DOM (buscando en todos los frames, por si vive
-// en un <iframe>) solo para calcular SUS COORDENADAS, y el click en sí
-// se hace con sendInputEvent — indistinguible de un click real de mouse
-// del sistema operativo. No era la causa del login trabado (ver
-// findButtonByTextJs más arriba), pero se mantiene como mecanismo de
-// click porque sí hace falta para el diálogo de confirmación tipo
-// "Confirm submission?" de la pantalla de IP Settings de este switch.
+// Encuentra el elemento (posiblemente dentro de un iframe mismo-origen
+// anidado) y lo clickea en el mismo documento donde vive — sin
+// coordenadas, sin sendInputEvent. El bug del botón Login nunca fue por
+// clicks no confiables (isTrusted) — fue un selector mal armado — así
+// que un click de DOM normal alcanza para todo este módulo.
 async function realClick(win, findElJs, timeoutMs = 6000) {
-  const findRectJs = `
-    (function(){
-      const el = ${findElJs};
-      if (!el) return null;
-      if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center' });
-      const r = el.getBoundingClientRect();
-      if (!r || r.width === 0 || r.height === 0) return null;
-      return JSON.stringify({ x: r.x, y: r.y, width: r.width, height: r.height });
-    })()
-  `;
   const clickJs = `
     (function(){
       const el = ${findElJs};
@@ -195,47 +199,12 @@ async function realClick(win, findElJs, timeoutMs = 6000) {
       return true;
     })()
   `;
-
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    for (const frame of allFrames(win)) {
-      const isTopFrame = frame === win.webContents.mainFrame;
-      try {
-        if (isTopFrame) {
-          // getBoundingClientRect() da coordenadas relativas a la ventana
-          // solo para el frame de nivel superior — ahí sí sirve el click
-          // real por mouse (sendInputEvent), que es indistinguible de un
-          // click de sistema operativo.
-          const json = await frame.executeJavaScript(findRectJs);
-          if (json) {
-            const rect = JSON.parse(json);
-            const clickX = Math.round(rect.x + rect.width / 2);
-            const clickY = Math.round(rect.y + rect.height / 2);
-            win.webContents.sendInputEvent({ type: 'mouseMove', x: clickX, y: clickY });
-            win.webContents.sendInputEvent({ type: 'mouseDown', x: clickX, y: clickY, button: 'left', clickCount: 1 });
-            await new Promise(r => setTimeout(r, 60));
-            win.webContents.sendInputEvent({ type: 'mouseUp', x: clickX, y: clickY, button: 'left', clickCount: 1 });
-            await new Promise(r => setTimeout(r, 400));
-            return true;
-          }
-        } else {
-          // Elemento dentro de un <iframe> anidado (p.ej. "mainFrame" de
-          // este switch, donde vive el contenido de cada sección del
-          // menú): su getBoundingClientRect() es relativo AL PROPIO
-          // iframe, no a la ventana, así que sendInputEvent con esas
-          // coordenadas apuntaría al lugar equivocado. Traducir el rect
-          // sumando el offset del <iframe> en cada frame padre es
-          // innecesario acá: el bug del botón Login nunca fue por clicks
-          // no confiables (isTrusted) — fue un selector mal armado (ver
-          // findButtonByTextJs) — así que un click de DOM normal dentro
-          // del frame donde vive el elemento alcanza.
-          const clicked = await frame.executeJavaScript(clickJs);
-          if (clicked) {
-            await new Promise(r => setTimeout(r, 400));
-            return true;
-          }
-        }
-      } catch (e) { /* siguiente frame */ }
+    const clicked = await exec(win, clickJs).catch(() => false);
+    if (clicked) {
+      await new Promise(r => setTimeout(r, 400));
+      return true;
     }
     await new Promise(r => setTimeout(r, 300));
   }
@@ -246,10 +215,10 @@ async function clickButton(win, text, timeoutMs = 2000) {
   return realClick(win, findButtonByTextJs(text), timeoutMs);
 }
 
-// Ya van dos intentos (btn.click() y click real por coordenadas) sin
-// lograr pasar de la pantalla de login — en vez de seguir adivinando a
-// ciegas una tercera hipótesis, se guarda un screenshot + el HTML visible
-// en el momento exacto del fallo, para diagnosticar con datos reales.
+// Guarda screenshot + el HTML de CADA documento accesible (nivel
+// superior y todos los iframes mismo-origen, ver COLLECT_DOCS_JS) en el
+// momento exacto del fallo, para diagnosticar con datos reales en vez de
+// seguir adivinando selectores a ciegas.
 async function dumpDiagnostics(win, label) {
   try {
     const dir = path.join(app.getPath('userData'), 'debug');
@@ -259,19 +228,10 @@ async function dumpDiagnostics(win, label) {
     const png = await win.webContents.capturePage();
     fs.writeFileSync(path.join(dir, `switch-${label}-${stamp}.png`), png.toPNG());
 
-    // Bug real confirmado en producción: esto antes solo volcaba
-    // win.webContents (documento de nivel superior) — el contenido de
-    // System Summary/IP Settings/diálogos de confirmación vive dentro del
-    // <iframe name="mainFrame">, así que el HTML de nivel superior nunca
-    // mostraba lo que realmente falló. Ahora se vuelca CADA frame de la
-    // ventana (incluidos los iframes) en un archivo aparte.
-    const frames = allFrames(win);
-    for (let i = 0; i < frames.length; i++) {
-      try {
-        const html = await frames[i].executeJavaScript('document.documentElement.outerHTML');
-        fs.writeFileSync(path.join(dir, `switch-${label}-${stamp}-frame${i}.html`), html || '');
-      } catch (e) { /* frame no accesible, seguir con el resto */ }
-    }
+    const htmls = await exec(win, `(${COLLECT_DOCS_JS}).map(d => { try { return d.documentElement.outerHTML; } catch(e) { return '(sin acceso)'; } })`).catch(() => []);
+    (htmls || []).forEach((html, i) => {
+      fs.writeFileSync(path.join(dir, `switch-${label}-${stamp}-doc${i}.html`), html || '');
+    });
 
     return dir;
   } catch (e) {
@@ -288,12 +248,12 @@ async function dumpDiagnostics(win, label) {
 function findDialogButtonByTextHintJs(textHint) {
   return `
     (function(){
-      const all = Array.from(document.querySelectorAll('*'));
+      const all = ${allElementsJs()};
       const textEl = all.find(el => el.children.length === 0 && new RegExp(${JSON.stringify(textHint)}, 'i').test((el.textContent || '').trim()) && (el.textContent || '').trim().length < 80);
       if (!textEl) return null;
       let container = textEl.parentElement;
       let hops = 0;
-      while (container && container !== document.body && hops < 8) {
+      while (container && hops < 8) {
         const candidates = Array.from(container.querySelectorAll('button, [role=button], a, input[type=submit], input[type=button]'))
           .filter(b => (b.textContent || b.value || '').trim().length > 0);
         if (candidates.length) {
@@ -325,8 +285,8 @@ function findVisibleOkNearCancelJs() {
         return r.width > 0 && r.height > 0 && el.offsetParent !== null;
       };
       const label = b => (b.textContent || b.value || '').trim();
-      const candidates = Array.from(document.querySelectorAll('button, [role=button], a, input[type=submit], input[type=button]'))
-        .filter(isVisible);
+      const all = ${allElementsJs()};
+      const candidates = all.filter(b => b.matches && b.matches('button, [role=button], a, input[type=submit], input[type=button]') && isVisible(b));
       const okBtn = candidates.find(b => /^ok$/i.test(label(b)));
       if (!okBtn) return null;
       let container = okBtn.parentElement;
@@ -427,7 +387,7 @@ async function readAndSecure({ accessIp, newPass }) {
   try {
     await navigateAndWait(win, accessIp);
 
-    const onDashboard = await exec(win, `document.body.textContent.includes('System Summary')`).catch(() => false);
+    const onDashboard = await exec(win, containsTextAnyDocJs('System Summary')).catch(() => false);
 
     let activated = false;
     if (!onDashboard) {
@@ -437,9 +397,7 @@ async function readAndSecure({ accessIp, newPass }) {
       const promptedChange = await changePasswordIfPrompted(win, newPass);
       if (promptedChange) activated = true;
 
-      const stillNeedsLogin = await exec(win, `
-        !document.body.textContent.includes('System Summary')
-      `).catch(() => true);
+      const stillNeedsLogin = await exec(win, `!(${containsTextAnyDocJs('System Summary')})`).catch(() => true);
       if (stillNeedsLogin) {
         // Puede que admin/admin ya no sea válido (switch ya configurado
         // antes) — se reintenta con la contraseña objetivo.
@@ -449,7 +407,7 @@ async function readAndSecure({ accessIp, newPass }) {
       }
     }
 
-    const reachedDashboard = await waitFor(win, `document.body.textContent.includes('System Summary')`, 8000, 300);
+    const reachedDashboard = await waitFor(win, containsTextAnyDocJs('System Summary'), 8000, 300);
     if (!reachedDashboard) {
       const dir = await dumpDiagnostics(win, 'login-stuck');
       throw new Error(`No se pudo iniciar sesión en el switch ni con admin/admin ni con la contraseña nueva. Verificá la IP y que el switch esté en estado de fábrica.${dir ? ` Diagnóstico guardado en: ${dir}` : ''}`);
@@ -475,7 +433,7 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
   try {
     // Paso 1: System Summary → Device Name → Apply.
     if (deviceName) {
-      const onSummary = await waitFor(win, `document.body.textContent.includes('System Summary')`, 5000, 300);
+      const onSummary = await waitFor(win, containsTextAnyDocJs('System Summary'), 5000, 300);
       if (!onSummary) throw new Error('No se llegó a la pantalla de System Summary.');
 
       const setName = await setFieldByLabel(win, 'Device Name:', deviceName);
@@ -493,7 +451,7 @@ async function applyNetwork({ accessIp, deviceName, targetIp, targetMask, target
     if (targetIp && targetMask) {
       const clickedIpSettings = await clickButton(win, 'IP Settings');
       if (!clickedIpSettings) throw new Error('No se encontró "IP Settings" en el menú del switch.');
-      const onIpSettings = await waitFor(win, `document.body.textContent.includes('DHCP Settings')`, 5000, 300);
+      const onIpSettings = await waitFor(win, containsTextAnyDocJs('DHCP Settings'), 5000, 300);
       if (!onIpSettings) throw new Error('No se llegó a la pantalla de IP Settings.');
       await new Promise(r => setTimeout(r, 400));
 
