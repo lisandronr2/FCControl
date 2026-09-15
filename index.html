@@ -334,6 +334,11 @@ html, body {
   .results-item:hover { background: none; }
   .results-group-hdr, .sm-subhdr { background: #eee; color: #111; break-after: avoid; }
   .dd-badge { border: 1px solid currentColor; }
+  .sm-table-wrap { border: none; max-height: none; overflow: visible; }
+  .sm-table thead th { position: static; background: #eee !important; color: #111 !important; }
+  .sm-table tbody tr.sm-tr-ct td, .sm-table tbody tr.sm-tr-ubi td { background: #eee !important; color: #111 !important; break-after: avoid; }
+  .sm-table tbody tr.sm-tr-item td { border-bottom: 1px solid #eee; break-inside: avoid; }
+  .sm-table tbody tr.sm-tr-item.sm-zebra td { background: #f7f7f7 !important; }
 }
 .dd-badge {
   font-size: 10px; font-weight: 600; text-transform: uppercase;
@@ -680,17 +685,25 @@ html, body {
   display: flex; align-items: center; justify-content: space-between;
   gap: 8px; margin-bottom: 8px; flex-wrap: wrap;
 }
-.sm-count { font-size: 12px; color: var(--gray); }
-.sm-list { border-top: .5px solid var(--line); }
-.sm-subhdr {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 6px 4px 4px; margin-top: 4px;
-  font-family: var(--mono); font-size: 11.5px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: .04em; color: var(--blue3);
-}
-.sm-subhdr-count { color: var(--gray); font-weight: 600; }
+.sm-count { font-size: 12px; color: var(--gray); margin-bottom: 6px; }
 
-.sm-ct-filter-row { position: relative; margin-bottom: 10px; }
+/* ── Totales (con Serial / sin Serial) al inicio del reporte ── */
+.sm-totals-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.sm-total-chip {
+  flex: 1; border-radius: 10px; padding: 8px 10px; text-align: center;
+  border: 1.5px solid var(--line);
+}
+.sm-total-chip.sm-total-ok   { background: #E0F3EB; border-color: #1C6B3A; }
+.sm-total-chip.sm-total-pend { background: #FEF3E1; border-color: #8A5A06; }
+.sm-total-n {
+  display: block; font-family: 'Barlow Condensed', sans-serif;
+  font-size: 24px; font-weight: 700; line-height: 1;
+}
+.sm-total-ok   .sm-total-n { color: #1C6B3A; }
+.sm-total-pend .sm-total-n { color: #8A5A06; }
+.sm-total-l { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--gray); }
+
+/* ── Botón que abre el modal de filtro por CT ── */
 .sm-ct-filter-btn {
   display: flex; align-items: center; gap: 5px;
   padding: 7px 12px; border-radius: 8px;
@@ -699,28 +712,61 @@ html, body {
   cursor: pointer; max-width: 100%;
 }
 .sm-ct-filter-btn:active { background: var(--line); }
-.sm-ct-dd { top: calc(100% + 4px); max-height: 280px; display: flex; flex-direction: column; }
+
+/* Confirmado en uso real: el desplegable inline (position:absolute)
+   quedaba flotando por encima del reporte y tapaba justo lo que el
+   técnico quería ver al filtrar. Ahora es un modal propio (mismo
+   patrón que camcfg-modal), separado del flujo de la página — nunca
+   se superpone al contenido, y se cierra explícitamente. */
+.sm-ct-modal-card { max-width: 380px; max-height: 80vh; display: flex; flex-direction: column; padding-bottom: 16px; }
 .sm-ct-dd-actions {
-  display: flex; gap: 6px; padding: 8px 10px;
-  border-bottom: .5px solid var(--line); flex-shrink: 0;
+  display: flex; gap: 6px; padding: 4px 0 10px; flex-shrink: 0;
 }
 .sm-ct-dd-actions button {
-  flex: 1; padding: 5px; border-radius: 6px; border: 1px solid var(--line);
-  background: var(--white); font-size: 11.5px; font-weight: 700;
+  flex: 1; padding: 7px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--white); font-size: 12px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .03em; color: var(--blue3); cursor: pointer;
 }
 .sm-ct-dd-actions button:active { background: var(--paper2); }
-#smCtOptions { overflow-y: auto; }
+.sm-ct-modal-list { overflow-y: auto; border-top: .5px solid var(--line); }
 .sm-ct-item {
   display: flex; align-items: center; gap: 9px;
-  padding: 9px 12px; cursor: pointer; border-bottom: .5px solid var(--line);
-  font-size: 13.5px;
+  padding: 10px 4px; cursor: pointer; border-bottom: .5px solid var(--line);
+  font-size: 14px;
 }
 .sm-ct-item:last-child { border-bottom: none; }
 .sm-ct-item:hover { background: var(--paper2); }
-.sm-ct-item input[type=checkbox] { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--blue3); }
+.sm-ct-item input[type=checkbox] { width: 17px; height: 17px; flex-shrink: 0; accent-color: var(--blue3); }
 .sm-ct-item span { flex: 1; min-width: 0; }
 .sm-ct-item small { color: var(--gray); font-weight: 400; }
+
+/* ── Reporte como tabla (filas/columnas), en vez de lista de tarjetas ── */
+.sm-table-wrap {
+  border: 1.5px solid var(--ink); border-radius: 10px; overflow: hidden auto;
+  max-height: 60vh;
+}
+.sm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sm-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--ink); color: var(--paper); text-align: left;
+  padding: 8px 10px; font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+}
+.sm-table thead th.sm-th-val { text-align: right; }
+.sm-table tbody tr.sm-tr-ct td {
+  background: var(--blue); color: #fff; font-weight: 700; padding: 6px 10px;
+  font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .03em;
+}
+.sm-table tbody tr.sm-tr-ubi td {
+  background: var(--paper2); color: var(--blue3); font-weight: 700; padding: 5px 10px;
+  font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em;
+}
+.sm-table tbody tr.sm-tr-item td { padding: 8px 10px; border-bottom: .5px solid var(--line); vertical-align: top; }
+.sm-table tbody tr.sm-tr-item.sm-zebra td { background: var(--paper2); }
+.sm-table tbody tr.sm-tr-item:hover td { background: #EDF2FB; }
+.sm-table td.sm-td-name { font-weight: 500; }
+.sm-table td.sm-td-val { font-family: var(--mono); text-align: right; white-space: nowrap; }
+.sm-table td.sm-td-val.sm-td-pending { color: var(--gray); font-style: italic; font-family: inherit; }
 
 /* ══ Configurar cámara ════════════════════════════════════════ */
 .camcfg-btn {
@@ -955,7 +1001,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.59</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.60</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -1125,24 +1171,40 @@ html, body {
           <button class="sm-toggle-btn" id="smPendingBtn" data-col="PENDING">Sin Serial</button>
         </div>
       </div>
-      <div class="sm-ct-filter-row">
-        <button class="sm-ct-filter-btn" id="smCtFilterBtn">🏷 <span id="smCtFilterLabel">Todos los CT</span> ▾</button>
-        <div class="dropdown sm-ct-dd" id="smCtDropdown">
-          <div class="sm-ct-dd-actions">
-            <button type="button" id="smCtAllBtn">Todos</button>
-            <button type="button" id="smCtNoneBtn">Ninguno</button>
-          </div>
-          <div id="smCtOptions"></div>
+      <div class="sm-totals-row">
+        <div class="sm-total-chip sm-total-ok">
+          <span class="sm-total-n" id="smTotalSerial">0</span>
+          <span class="sm-total-l">Con Serial</span>
+        </div>
+        <div class="sm-total-chip sm-total-pend">
+          <span class="sm-total-n" id="smTotalPending">0</span>
+          <span class="sm-total-l">Sin Serial</span>
         </div>
       </div>
       <div class="sm-subrow">
-        <span class="sm-count" id="smCount"></span>
+        <button class="sm-ct-filter-btn" id="smCtFilterBtn">🏷 <span id="smCtFilterLabel">Todos los CT</span> ▾</button>
         <div class="export-actions">
           <button class="print-btn" id="smPrintBtn" title="Exportar a PDF">🖨 PDF</button>
           <button class="print-btn" id="smCsvBtn" title="Exportar a Excel">📊 Excel</button>
         </div>
       </div>
-      <div class="sm-list" id="smList"></div>
+      <div class="sm-count" id="smCount"></div>
+      <div class="sm-table-wrap"><table class="sm-table" id="smTable"><tbody id="smList"></tbody></table></div>
+    </div>
+
+    <!-- Modal: filtro por CT (aparte del flujo de la página, nunca tapa el reporte) -->
+    <div class="camcfg-modal hidden" id="smCtModal">
+      <div class="camcfg-card sm-ct-modal-card">
+        <div class="camcfg-head">
+          <span class="camcfg-title">Filtrar por CT</span>
+          <button class="camcfg-close" id="smCtModalClose">✕</button>
+        </div>
+        <div class="sm-ct-dd-actions">
+          <button type="button" id="smCtAllBtn">Todos</button>
+          <button type="button" id="smCtNoneBtn">Ninguno</button>
+        </div>
+        <div id="smCtOptions" class="sm-ct-modal-list"></div>
+      </div>
     </div>
 
     <div class="log-card">
@@ -2832,15 +2894,16 @@ function renderSmCtOptions(){
   });
 }
 
+// Confirmado en uso real: el desplegable inline quedaba flotando por
+// encima del reporte y tapaba justo lo que se quería ver — ahora es un
+// modal aparte (mismo patrón que camcfg-modal), nunca se superpone.
 $('smCtFilterBtn').addEventListener('click', () => {
-  const dd = $('smCtDropdown');
-  if (dd.classList.contains('open')){ dd.classList.remove('open'); return; }
   renderSmCtOptions();
-  dd.classList.add('open');
+  $('smCtModal').classList.remove('hidden');
 });
-document.addEventListener('click', e => {
-  const row = $('smCtFilterBtn').closest('.sm-ct-filter-row');
-  if (row && !row.contains(e.target)) $('smCtDropdown').classList.remove('open');
+$('smCtModalClose').addEventListener('click', () => $('smCtModal').classList.add('hidden'));
+$('smCtModal').addEventListener('click', e => {
+  if (e.target.id === 'smCtModal') $('smCtModal').classList.add('hidden');
 });
 $('smCtAllBtn').addEventListener('click', () => {
   smCtFilterActive = false;
@@ -2857,9 +2920,12 @@ $('smCtNoneBtn').addEventListener('click', () => {
   renderSerialMacSummary();
 });
 
-// Arma el HTML agrupado CT → Ubicación (BTV) a partir de entries; se usa
-// tanto para pintar la lista en pantalla como para exportar a PDF.
-function buildGroupedListHtml(entries){
+// Arma filas de <table> agrupadas CT → Ubicación (BTV) a partir de
+// entries — filas/columnas en vez de tarjetas apiladas, para que el
+// reporte se lea de un vistazo como una planilla. Se usa tanto para
+// pintar la tabla en pantalla como para exportar a PDF (envuelto en su
+// propio <table> con <thead>, ver llamadas más abajo).
+function buildTableRowsHtml(entries, valLabel, isPending){
   const ctGroups = new Map();
   entries.forEach(e => {
     if (!ctGroups.has(e.ct)) ctGroups.set(e.ct, new Map());
@@ -2870,26 +2936,31 @@ function buildGroupedListHtml(entries){
 
   const sortedCts = [...ctGroups.keys()].sort((a, b) => a.localeCompare(b, 'es'));
   let html = '';
+  let rowIdx = 0;
   sortedCts.forEach(ct => {
     const ubiMap   = ctGroups.get(ct);
     const ctTotal  = [...ubiMap.values()].reduce((sum, arr) => sum + arr.length, 0);
-    html += '<div class="results-group-hdr"><span>' + ct + '</span>' +
-      '<span class="results-group-hdr-count">' + ctTotal + ' disp.</span></div>';
+    html += '<tr class="sm-tr-ct"><td colspan="3">' + ct + ' <span style="float:right;opacity:.75">' + ctTotal + ' disp.</span></td></tr>';
 
     const sortedUbis = [...ubiMap.keys()].sort((a, b) => a.localeCompare(b, 'es'));
     sortedUbis.forEach(ubi => {
       const items = ubiMap.get(ubi).slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-      html += '<div class="sm-subhdr"><span>' + ubi + '</span>' +
-        '<span class="sm-subhdr-count">' + items.length + '</span></div>';
+      html += '<tr class="sm-tr-ubi"><td colspan="3">' + ubi + ' <span style="float:right;opacity:.75">' + items.length + '</span></td></tr>';
       items.forEach(it => {
-        html += '<div class="results-item results-item--child">' +
-          '<span class="ri-main">' + it.nombre + '</span>' +
-          '<span class="ri-sub">' + it.valor + '</span>' +
-        '</div>';
+        const zebra = (rowIdx++ % 2) ? ' sm-zebra' : '';
+        html += '<tr class="sm-tr-item' + zebra + '">' +
+          '<td class="sm-td-name">' + it.nombre + '</td>' +
+          '<td>' + it.ubicacion + '</td>' +
+          '<td class="sm-td-val' + (isPending ? ' sm-td-pending' : '') + '">' + it.valor + '</td>' +
+        '</tr>';
       });
     });
   });
   return html;
+}
+
+function smTableHeadHtml(valLabel){
+  return '<thead><tr><th>Dispositivo</th><th>Báculo/Rack</th><th class="sm-th-val">' + valLabel + '</th></tr></thead>';
 }
 
 function smModeLabels(){
@@ -2898,15 +2969,28 @@ function smModeLabels(){
   return { short: 'Serial', titled: 'Serial registrados', phrase: 'con Serial registrado' };
 }
 
+// Totales rápidos (con Serial / sin Serial) que se muestran siempre al
+// inicio del reporte, sin importar qué modo (Serial/MAC/Sin Serial) esté
+// activo — respetan el filtro de CT para dar una idea de la selección
+// actual, pero no dependen del toggle.
+function renderSmTotals(){
+  $('smTotalSerial').textContent  = collectEntries('SERIAL').length;
+  $('smTotalPending').textContent = collectEntries('PENDING').length;
+}
+
 function renderSerialMacSummary(){
   const countEl = $('smCount');
-  const listEl  = $('smList');
-  const { titled, phrase } = smModeLabels();
+  const tableEl = $('smTable');
+  const listEl  = $('smList'); // <tbody>
+  const { titled, phrase, short } = smModeLabels();
   $('smTitle').textContent = titled;
+
+  renderSmTotals();
 
   if (!Object.keys(getDevicesMap()).length){
     countEl.textContent = '';
-    listEl.innerHTML = '<div class="dd-empty">Sincronizá los datos offline (⟳) para ver este resumen.</div>';
+    tableEl.innerHTML = '';
+    listEl.innerHTML = '<tr><td colspan="3" class="dd-empty">Sincronizá los datos offline (⟳) para ver este resumen.</td></tr>';
     return;
   }
 
@@ -2915,11 +2999,15 @@ function renderSerialMacSummary(){
   countEl.textContent = entries.length + ' dispositivo' + (entries.length !== 1 ? 's' : '') + ' ' + phrase;
 
   if (!entries.length){
-    listEl.innerHTML = '<div class="dd-empty">Sin dispositivos ' + phrase + (smCtFilterActive ? ' en los CT seleccionados' : '') + '.</div>';
+    tableEl.innerHTML = '';
+    listEl.innerHTML = '<tr><td colspan="3" class="dd-empty">Sin dispositivos ' + phrase + (smCtFilterActive ? ' en los CT seleccionados' : '') + '.</td></tr>';
     return;
   }
 
-  listEl.innerHTML = buildGroupedListHtml(entries);
+  const valLabel = smCol === 'PENDING' ? 'Estado' : short;
+  tableEl.querySelectorAll('thead').forEach(t => t.remove());
+  tableEl.insertAdjacentHTML('afterbegin', smTableHeadHtml(valLabel));
+  listEl.innerHTML = buildTableRowsHtml(entries, valLabel, smCol === 'PENDING');
 }
 
 function setSmMode(mode){
@@ -2935,7 +3023,10 @@ $('smPendingBtn').addEventListener('click', () => setSmMode('PENDING'));
 $('smPrintBtn').addEventListener('click', () => {
   const entries = collectEntries(smCol);
   if (!entries.length){ showToast('No hay dispositivos para exportar.', 'err'); return; }
-  printAsPDF(smModeLabels().titled, '<div class="results-list">' + buildGroupedListHtml(entries) + '</div>');
+  const { titled, short } = smModeLabels();
+  const valLabel = smCol === 'PENDING' ? 'Estado' : short;
+  printAsPDF(titled, '<table class="sm-table">' + smTableHeadHtml(valLabel) +
+    '<tbody>' + buildTableRowsHtml(entries, valLabel, smCol === 'PENDING') + '</tbody></table>');
 });
 
 $('smCsvBtn').addEventListener('click', () => {
