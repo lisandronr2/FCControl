@@ -690,6 +690,38 @@ html, body {
 }
 .sm-subhdr-count { color: var(--gray); font-weight: 600; }
 
+.sm-ct-filter-row { position: relative; margin-bottom: 10px; }
+.sm-ct-filter-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 7px 12px; border-radius: 8px;
+  border: 1.5px solid var(--line); background: var(--paper2);
+  font-size: 12.5px; font-weight: 600; color: var(--ink);
+  cursor: pointer; max-width: 100%;
+}
+.sm-ct-filter-btn:active { background: var(--line); }
+.sm-ct-dd { top: calc(100% + 4px); max-height: 280px; display: flex; flex-direction: column; }
+.sm-ct-dd-actions {
+  display: flex; gap: 6px; padding: 8px 10px;
+  border-bottom: .5px solid var(--line); flex-shrink: 0;
+}
+.sm-ct-dd-actions button {
+  flex: 1; padding: 5px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--white); font-size: 11.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .03em; color: var(--blue3); cursor: pointer;
+}
+.sm-ct-dd-actions button:active { background: var(--paper2); }
+#smCtOptions { overflow-y: auto; }
+.sm-ct-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 12px; cursor: pointer; border-bottom: .5px solid var(--line);
+  font-size: 13.5px;
+}
+.sm-ct-item:last-child { border-bottom: none; }
+.sm-ct-item:hover { background: var(--paper2); }
+.sm-ct-item input[type=checkbox] { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--blue3); }
+.sm-ct-item span { flex: 1; min-width: 0; }
+.sm-ct-item small { color: var(--gray); font-weight: 400; }
+
 /* ══ Configurar cámara ════════════════════════════════════════ */
 .camcfg-btn {
   width: 100%; background: none; color: var(--blue);
@@ -923,7 +955,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.58</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.59</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -1086,10 +1118,21 @@ html, body {
     </div>
     <div class="sm-card">
       <div class="sm-head">
-        <span class="sm-title">Serial / MAC registrados</span>
+        <span class="sm-title" id="smTitle">Serial registrados</span>
         <div class="sm-toggle">
           <button class="sm-toggle-btn active" id="smSerialBtn" data-col="SERIAL">Serial</button>
           <button class="sm-toggle-btn" id="smMacBtn" data-col="MAC">MAC</button>
+          <button class="sm-toggle-btn" id="smPendingBtn" data-col="PENDING">Sin Serial</button>
+        </div>
+      </div>
+      <div class="sm-ct-filter-row">
+        <button class="sm-ct-filter-btn" id="smCtFilterBtn">🏷 <span id="smCtFilterLabel">Todos los CT</span> ▾</button>
+        <div class="dropdown sm-ct-dd" id="smCtDropdown">
+          <div class="sm-ct-dd-actions">
+            <button type="button" id="smCtAllBtn">Todos</button>
+            <button type="button" id="smCtNoneBtn">Ninguno</button>
+          </div>
+          <div id="smCtOptions"></div>
         </div>
       </div>
       <div class="sm-subrow">
@@ -2321,8 +2364,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 /* ════ Resumen del día ════════════════════════════════════════ */
 function renderSummary(){
   const total      = dayLog.length;
-  const pendSerial = Math.max(0, totalDevices - collectFilledEntries('SERIAL').length);
-  const pendMac    = Math.max(0, totalDevices - collectFilledEntries('MAC').length);
+  const pendSerial = Math.max(0, totalDevices - collectEntries('SERIAL', false).length);
+  const pendMac    = Math.max(0, totalDevices - collectEntries('MAC', false).length);
   const pct        = totalDevices > 0 ? Math.round((total / totalDevices) * 100) : 0;
 
   $('sumTotal').textContent      = total;
@@ -2692,12 +2735,19 @@ autoSync();
 syncPendingQueue({ silent: true });
 
 /* ════ Resumen por Serial / MAC (agrupado por CT → Ubicación) ═ */
-let smCol = 'SERIAL';
+let smCol = 'SERIAL';          // 'SERIAL' | 'MAC' | 'PENDING' (PENDING = celda Serial vacía)
+let smCtFilterActive = false;  // false = sin filtro (todos los CT)
+let smCtFilter = new Set();    // CTs seleccionados, solo relevante si smCtFilterActive
 
-// Dispositivos cuyo SERIAL o MAC (según col) no está vacío, con datos de CT/Ubicación
-function collectFilledEntries(col){
+// Dispositivos según el modo:
+//  - SERIAL/MAC: la celda de esa columna NO está vacía (registrados)
+//  - PENDING: la celda de SERIAL SÍ está vacía (pendientes de capturar)
+// En los tres casos solo se consideran dispositivos que tienen esa
+// columna en el Sheet (si el dispositivo no tiene columna Serial/MAC no
+// hay forma de saber si "está vacía" o simplemente no aplica).
+function collectEntries(mode, applyCtFilter = true){
   const map = getDevicesMap();
-  const candidates = col === 'SERIAL' ? ['SERIAL', 'SERIAL NUMBER'] : ['MAC', 'MAC ADDRESS'];
+  const candidates = mode === 'MAC' ? ['MAC', 'MAC ADDRESS'] : ['SERIAL', 'SERIAL NUMBER'];
 
   const entries = [];
   Object.values(map).forEach(dev => {
@@ -2706,7 +2756,7 @@ function collectFilledEntries(col){
     const colHeader = findHeaderKey(headers, candidates);
     if (!colHeader) return;
     const val = (result[colHeader] || '').toString().trim();
-    if (!val) return;
+    if (mode === 'PENDING' ? !!val : !val) return;
 
     const nombreHeader = findHeaderKey(headers, ['NOMBRE', 'NAME']);
     const ctHeader      = findHeaderKey(headers, ['CT']);
@@ -2716,11 +2766,96 @@ function collectFilledEntries(col){
       nombre:    (nombreHeader && result[nombreHeader]) || '(sin nombre)',
       ct:        (ctHeader && result[ctHeader])          || '—',
       ubicacion: (ubiHeader && result[ubiHeader])          || '—',
-      valor:     val
+      valor:     mode === 'PENDING' ? '— sin capturar —' : val
     });
   });
-  return entries;
+
+  return (applyCtFilter && smCtFilterActive) ? entries.filter(e => smCtFilter.has(e.ct)) : entries;
 }
+
+/* ── Filtro por CT (multi-selección) ── */
+function allKnownCts(){
+  const map = getDevicesMap();
+  const ctHeaderCache = {};
+  const cts = new Set();
+  Object.values(map).forEach(dev => {
+    const headers = dev.headers || [];
+    const result  = dev.result  || {};
+    const ctHeader = findHeaderKey(headers, ['CT']);
+    if (!ctHeader) return;
+    const val = (result[ctHeader] || '').toString().trim();
+    if (val) cts.add(val);
+  });
+  return [...cts].sort((a, b) => a.localeCompare(b, 'es'));
+}
+
+function renderSmCtFilterLabel(){
+  const label = $('smCtFilterLabel');
+  if (!smCtFilterActive) label.textContent = 'Todos los CT';
+  else if (!smCtFilter.size) label.textContent = 'Ningún CT';
+  else if (smCtFilter.size === 1) label.textContent = [...smCtFilter][0];
+  else label.textContent = smCtFilter.size + ' CT seleccionados';
+}
+
+function renderSmCtOptions(){
+  const cts = allKnownCts();
+  const box = $('smCtOptions');
+  if (!cts.length){
+    box.innerHTML = '<div class="dd-empty">Sincronizá los datos offline (⟳) para filtrar por CT.</div>';
+    return;
+  }
+  box.innerHTML = cts.map(ct => {
+    // Sin filtro activo, se muestran todos marcados (reflejando "todos
+    // incluidos"); con filtro activo, se refleja la selección real.
+    const checked = (smCtFilterActive ? smCtFilter.has(ct) : true) ? 'checked' : '';
+    const cnt = Object.values(getDevicesMap()).filter(dev => {
+      const h = findHeaderKey(dev.headers || [], ['CT']);
+      return h && (dev.result[h] || '').toString().trim() === ct;
+    }).length;
+    return '<label class="sm-ct-item"><input type="checkbox" value="' + ct.replace(/"/g,'&quot;') + '" ' + checked + '>' +
+      '<span>' + ct + '</span><small>' + cnt + '</small></label>';
+  }).join('');
+  box.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      // Primer toque sobre un checkbox individual: si no había filtro
+      // activo, arrancar desde "todos seleccionados" y aplicar el toggle
+      // sobre eso — así destildar uno solo deja el resto tildado, en vez
+      // de saltar de golpe a "solo este".
+      if (!smCtFilterActive){
+        smCtFilter = new Set(allKnownCts());
+        smCtFilterActive = true;
+      }
+      if (cb.checked) smCtFilter.add(cb.value); else smCtFilter.delete(cb.value);
+      renderSmCtFilterLabel();
+      renderSerialMacSummary();
+    });
+  });
+}
+
+$('smCtFilterBtn').addEventListener('click', () => {
+  const dd = $('smCtDropdown');
+  if (dd.classList.contains('open')){ dd.classList.remove('open'); return; }
+  renderSmCtOptions();
+  dd.classList.add('open');
+});
+document.addEventListener('click', e => {
+  const row = $('smCtFilterBtn').closest('.sm-ct-filter-row');
+  if (row && !row.contains(e.target)) $('smCtDropdown').classList.remove('open');
+});
+$('smCtAllBtn').addEventListener('click', () => {
+  smCtFilterActive = false;
+  smCtFilter.clear();
+  renderSmCtFilterLabel();
+  renderSmCtOptions();
+  renderSerialMacSummary();
+});
+$('smCtNoneBtn').addEventListener('click', () => {
+  smCtFilterActive = true;
+  smCtFilter.clear();
+  renderSmCtFilterLabel();
+  renderSmCtOptions();
+  renderSerialMacSummary();
+});
 
 // Arma el HTML agrupado CT → Ubicación (BTV) a partir de entries; se usa
 // tanto para pintar la lista en pantalla como para exportar a PDF.
@@ -2757,10 +2892,17 @@ function buildGroupedListHtml(entries){
   return html;
 }
 
+function smModeLabels(){
+  if (smCol === 'MAC')     return { short: 'MAC',    titled: 'MAC registrados',     phrase: 'con MAC registrado' };
+  if (smCol === 'PENDING') return { short: 'Pendientes', titled: 'Sin Serial capturado', phrase: 'sin Serial capturado' };
+  return { short: 'Serial', titled: 'Serial registrados', phrase: 'con Serial registrado' };
+}
+
 function renderSerialMacSummary(){
   const countEl = $('smCount');
   const listEl  = $('smList');
-  const label   = smCol === 'SERIAL' ? 'Serial' : 'MAC';
+  const { titled, phrase } = smModeLabels();
+  $('smTitle').textContent = titled;
 
   if (!Object.keys(getDevicesMap()).length){
     countEl.textContent = '';
@@ -2768,43 +2910,38 @@ function renderSerialMacSummary(){
     return;
   }
 
-  const entries = collectFilledEntries(smCol);
+  const entries = collectEntries(smCol);
 
-  countEl.textContent = entries.length + ' dispositivo' + (entries.length !== 1 ? 's' : '') +
-    ' con ' + label + ' registrado' + (entries.length !== 1 ? 's' : '');
+  countEl.textContent = entries.length + ' dispositivo' + (entries.length !== 1 ? 's' : '') + ' ' + phrase;
 
   if (!entries.length){
-    listEl.innerHTML = '<div class="dd-empty">Sin dispositivos con ' + label + ' registrado.</div>';
+    listEl.innerHTML = '<div class="dd-empty">Sin dispositivos ' + phrase + (smCtFilterActive ? ' en los CT seleccionados' : '') + '.</div>';
     return;
   }
 
   listEl.innerHTML = buildGroupedListHtml(entries);
 }
 
-$('smSerialBtn').addEventListener('click', () => {
-  smCol = 'SERIAL';
-  $('smSerialBtn').classList.add('active');
-  $('smMacBtn').classList.remove('active');
+function setSmMode(mode){
+  smCol = mode;
+  ['smSerialBtn', 'smMacBtn', 'smPendingBtn'].forEach(id => $(id).classList.remove('active'));
+  $({ SERIAL: 'smSerialBtn', MAC: 'smMacBtn', PENDING: 'smPendingBtn' }[mode]).classList.add('active');
   renderSerialMacSummary();
-});
-$('smMacBtn').addEventListener('click', () => {
-  smCol = 'MAC';
-  $('smMacBtn').classList.add('active');
-  $('smSerialBtn').classList.remove('active');
-  renderSerialMacSummary();
-});
+}
+$('smSerialBtn').addEventListener('click', () => setSmMode('SERIAL'));
+$('smMacBtn').addEventListener('click', () => setSmMode('MAC'));
+$('smPendingBtn').addEventListener('click', () => setSmMode('PENDING'));
 
 $('smPrintBtn').addEventListener('click', () => {
-  const entries = collectFilledEntries(smCol);
+  const entries = collectEntries(smCol);
   if (!entries.length){ showToast('No hay dispositivos para exportar.', 'err'); return; }
-  const label = smCol === 'SERIAL' ? 'Serial' : 'MAC';
-  printAsPDF(label + ' registrados', '<div class="results-list">' + buildGroupedListHtml(entries) + '</div>');
+  printAsPDF(smModeLabels().titled, '<div class="results-list">' + buildGroupedListHtml(entries) + '</div>');
 });
 
 $('smCsvBtn').addEventListener('click', () => {
-  const entries = collectFilledEntries(smCol);
+  const entries = collectEntries(smCol);
   if (!entries.length){ showToast('No hay dispositivos para exportar.', 'err'); return; }
-  const label = smCol === 'SERIAL' ? 'Serial' : 'MAC';
+  const label = smModeLabels().short;
   downloadCSV(
     'fccontrol_' + smCol.toLowerCase() + '.csv',
     ['Dispositivo', 'CT', 'Báculo/Rack', label],
