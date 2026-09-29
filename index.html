@@ -1001,7 +1001,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.60</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.61</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -1288,6 +1288,11 @@ function isNativeApp(){
   return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 }
 
+function slugifyFilename(title){
+  return title.normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'reporte';
+}
+
 // Imprime (→ "Guardar como PDF") el título + HTML dado, sin importar
 // qué vista esté activa en pantalla.
 async function printAsPDF(title, bodyHtml){
@@ -1303,6 +1308,25 @@ async function printAsPDF(title, bodyHtml){
       await printerPlugin.printCurrent();
     } catch(e){
       showToast('No se pudo imprimir: ' + (e.message || e.errorMessage || 'error desconocido'), 'err');
+    }
+    document.body.classList.remove('print-mode');
+    area.innerHTML = '';
+    return;
+  }
+
+  // Escritorio (Electron): genera el PDF directo en el proceso principal
+  // en vez de window.print() — ese diálogo nativo depende de que Windows
+  // tenga algún driver de impresora (ni siquiera "Microsoft Print to PDF"
+  // viene garantizada) y en máquinas sin ninguno instalado no aparecía
+  // nada al tocar el botón. Ver electron/main.js (pdf:export).
+  if (window.ElectronPDF && window.ElectronPDF.isElectron){
+    await new Promise(r => setTimeout(r, 80));
+    try {
+      const res = await window.ElectronPDF.exportPDF(slugifyFilename(title) + '.pdf');
+      if (res && res.ok) showToast('PDF guardado.', 'ok');
+      else if (res && !res.canceled) showToast('No se pudo guardar el PDF: ' + (res.error || 'error desconocido'), 'err');
+    } catch(e){
+      showToast('No se pudo guardar el PDF: ' + (e.message || 'error desconocido'), 'err');
     }
     document.body.classList.remove('print-mode');
     area.innerHTML = '';

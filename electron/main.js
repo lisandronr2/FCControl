@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const hikvision = require('./hikvisionIsapi');
@@ -140,3 +140,28 @@ ipcMain.handle('hik:applyNetwork', async (_event, opts) => hikvision.applyNetwor
 // IPC: mismo patrón para switches TP-Link Omada (dispositivos ARMxx).
 ipcMain.handle('switch:readAndSecure', async (_event, opts) => omadaSwitch.readAndSecure(opts));
 ipcMain.handle('switch:applyNetwork', async (_event, opts) => omadaSwitch.applyNetwork(opts));
+
+// IPC: exportar a PDF generando el archivo directo en el proceso
+// principal (webContents.printToPDF), sin pasar por window.print() /
+// el diálogo nativo de impresión — ese diálogo depende de que Windows
+// tenga algún driver de impresora instalado (ni siquiera la virtual
+// "Microsoft Print to PDF" viene garantizada en todas las máquinas), y
+// cuando no hay ninguno simplemente no aparece nada. printToPDF no
+// depende de eso y respeta el mismo CSS @media print que ya usa la app.
+ipcMain.handle('pdf:export', async (_event, { suggestedName }) => {
+  if (!mainWindow) return { ok: false, error: 'sin ventana activa' };
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: 'Guardar PDF',
+    defaultPath: suggestedName || 'reporte.pdf',
+    filters: [{ name: 'PDF', extensions: ['pdf'] }]
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try {
+    const data = await mainWindow.webContents.printToPDF({ printBackground: true, pageSize: 'A4' });
+    fs.writeFileSync(filePath, data);
+    shell.openPath(filePath);
+    return { ok: true, filePath };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});

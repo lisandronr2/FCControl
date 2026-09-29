@@ -16,3 +16,15 @@ contextBridge.exposeInMainWorld('ElectronOmadaSwitch', {
   readAndSecure: opts => ipcRenderer.invoke('switch:readAndSecure', opts),
   applyNetwork: opts => ipcRenderer.invoke('switch:applyNetwork', opts)
 });
+
+// Exportar a PDF sin pasar por window.print(): en varias máquinas de
+// campo no hay ninguna impresora (ni siquiera la virtual "Microsoft
+// Print to PDF") instalada/habilitada, y en ese caso el diálogo nativo
+// de impresión de Chromium simplemente no aparece — el botón "PDF"
+// parecía no hacer nada. Este camino genera el PDF en el proceso
+// principal (webContents.printToPDF, no depende de ningún driver de
+// impresora) y lo guarda directo en disco.
+contextBridge.exposeInMainWorld('ElectronPDF', {
+  isElectron: true,
+  exportPDF: suggestedName => ipcRenderer.invoke('pdf:export', { suggestedName })
+});
