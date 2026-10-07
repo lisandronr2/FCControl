@@ -143,6 +143,11 @@ html, body {
 .search-combo .search-sel.value { width: 100%; cursor: text; }
 .search-combo .dropdown { top: calc(100% + 5px); }
 
+/* Mismo patrón para Serial/MAC: sugerencias de valores ya usados en
+   OTROS dispositivos a medida que se tipea (desde 3 caracteres) — ayuda
+   a notar un posible duplicado antes de terminar de escribir. */
+.field-combo { position: relative; }
+
 /* ══ Buscador con desplegable ════════════════════════════════ */
 .search-wrap { position: relative; margin-bottom: 4px; }
 
@@ -348,6 +353,7 @@ html, body {
 .dd-badge.done   { background: #E0F3EB; color: #1C6B3A; }
 .dd-badge.pend   { background: #FEF3E1; color: #8A5A06; }
 .dd-badge.tipo-armario { background: #E4E9FB; color: #2C3E8C; margin-right: 4px; }
+.dd-badge.device { background: var(--paper2); color: var(--blue3); text-transform: none; letter-spacing: normal; }
 .dd-count { font-size: 11px; color: var(--gray); text-align: right; padding: 8px 14px; }
 
 /* Sin resultados */
@@ -1001,7 +1007,7 @@ html, body {
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">FCControl</span>
-      <span class="brand-sub">Control de Cámaras · v1.0.62</span>
+      <span class="brand-sub">Control de Cámaras · v1.0.63</span>
     </div>
     <div class="topbar-right">
       <span id="pendingPill" class="pending-pill hidden"></span>
@@ -1096,21 +1102,27 @@ html, body {
       <div class="serial-block">
         <div class="field">
           <label class="lbl" for="fSerial">Serial Number <span style="color:var(--orange)">*</span></label>
-          <div class="serial-row">
-            <input id="fSerial" type="text"
-              placeholder="Ej. SN-20240501-XXXX"
-              autocomplete="off" autocorrect="off" autocapitalize="characters">
-            <button id="scanBtn" class="scan-trigger" title="Escanear código">📷</button>
+          <div class="field-combo">
+            <div class="serial-row">
+              <input id="fSerial" type="text"
+                placeholder="Ej. SN-20240501-XXXX"
+                autocomplete="off" autocorrect="off" autocapitalize="characters">
+              <button id="scanBtn" class="scan-trigger" title="Escanear código">📷</button>
+            </div>
+            <div class="dropdown" id="fSerialDropdown"></div>
           </div>
           <div class="err-msg" id="serialErr">El serial es obligatorio para guardar.</div>
         </div>
         <div class="field" id="macField" style="display:none">
           <label class="lbl" for="fMac">Dirección MAC</label>
-          <div class="serial-row">
-            <input id="fMac" type="text" class="text-f"
-              placeholder="Ej. 44:19:B6:XX:XX:XX"
-              autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
-            <button id="scanMacBtn" class="scan-trigger" title="Escanear código" type="button">📷</button>
+          <div class="field-combo">
+            <div class="serial-row">
+              <input id="fMac" type="text" class="text-f"
+                placeholder="Ej. 44:19:B6:XX:XX:XX"
+                autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
+              <button id="scanMacBtn" class="scan-trigger" title="Escanear código" type="button">📷</button>
+            </div>
+            <div class="dropdown" id="fMacDropdown"></div>
           </div>
         </div>
         <div class="field" id="estadoField" style="display:none;">
@@ -1616,6 +1628,71 @@ function findDeviceWithSerial(serial, excludeName){
   }
   return null;
 }
+
+/* ── Sugerencias de Serial/MAC a medida que se tipea ──────────
+   Mismo patrón que el combo de búsqueda (searchValueDropdown): desde 3
+   caracteres, muestra los valores ya cargados en OTROS dispositivos que
+   contienen lo tipeado — ayuda a notar un posible duplicado antes de
+   terminar de escribir, en vez de recién al salir del campo. */
+function collectFieldValues(kind){
+  const candidates = kind === 'MAC' ? ['MAC', 'MAC ADDRESS'] : ['SERIAL', 'SERIAL NUMBER'];
+  const map = getDevicesMap();
+  const out = [];
+  Object.values(map).forEach(dev => {
+    const headers = dev.headers || [];
+    const result   = dev.result  || {};
+    const h = findHeaderKey(headers, candidates);
+    if (!h) return;
+    const val = (result[h] || '').toString().trim();
+    if (!val || val.toUpperCase().includes('PENDING')) return;
+    const nombreHeader = findHeaderKey(headers, ['NOMBRE', 'NAME']);
+    const nombre = (nombreHeader && result[nombreHeader]) || '(sin nombre)';
+    out.push({ value: val, nombre });
+  });
+  return out;
+}
+
+function closeFieldDropdown(dd){
+  dd.classList.remove('open');
+  dd.innerHTML = '';
+}
+
+function renderFieldSuggestions(inputEl, dd, kind){
+  const q = inputEl.value.trim();
+  if (q.length < 3){ closeFieldDropdown(dd); return; }
+
+  const currentName = ($('cardName').textContent || '').trim();
+  const qn = normalizeTxt(q);
+  const matches = collectFieldValues(kind).filter(e =>
+    e.nombre !== currentName && normalizeTxt(e.value).includes(qn)
+  );
+
+  if (!matches.length){ closeFieldDropdown(dd); return; }
+
+  dd.innerHTML = '';
+  matches.slice(0, 20).forEach(m => {
+    const item = document.createElement('div');
+    item.className = 'dd-item';
+    item.innerHTML = '<span class="dd-name">' + highlight(m.value, q) + '</span>' +
+      '<span class="dd-badge device">' + m.nombre + '</span>';
+    item.addEventListener('mousedown', e => {
+      e.preventDefault(); // evita el blur antes de aplicar el click
+      inputEl.value = m.value;
+      closeFieldDropdown(dd);
+      inputEl.dispatchEvent(new Event('blur')); // dispara el mismo chequeo de duplicado que al tipear
+    });
+    dd.appendChild(item);
+  });
+  dd.classList.add('open');
+}
+
+$('fSerial').addEventListener('input', () => renderFieldSuggestions($('fSerial'), $('fSerialDropdown'), 'SERIAL'));
+$('fSerial').addEventListener('focus', () => renderFieldSuggestions($('fSerial'), $('fSerialDropdown'), 'SERIAL'));
+$('fSerial').addEventListener('blur', () => setTimeout(() => closeFieldDropdown($('fSerialDropdown')), 120));
+
+$('fMac').addEventListener('input', () => renderFieldSuggestions($('fMac'), $('fMacDropdown'), 'MAC'));
+$('fMac').addEventListener('focus', () => renderFieldSuggestions($('fMac'), $('fMacDropdown'), 'MAC'));
+$('fMac').addEventListener('blur', () => setTimeout(() => closeFieldDropdown($('fMacDropdown')), 120));
 
 // Quita el serial de un dispositivo (porque se movió a otro) en el Sheet;
 // si no hay red, lo deja en la cola offline para sincronizar después. Es
